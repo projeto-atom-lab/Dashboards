@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.9.2';
+var VERSION = '1.0.0';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
