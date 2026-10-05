@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.10.0';
+var VERSION = '1.11.0';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -78,6 +78,8 @@ function parseDate(v) {
 
 /* ============================== ESTILO ============================== */
 var AC = D.cor || '#c9a96a';
+var CLARO = D.tema === 'claro';
+var FUNDO = D.fundo || (CLARO ? '#e7e7e7' : '#0c0c0e');
 function injectStyle() {
   if (!document.getElementById('dz-font')) {
     var l = document.createElement('link'); l.id = 'dz-font'; l.rel = 'stylesheet';
@@ -85,7 +87,7 @@ function injectStyle() {
     document.head.appendChild(l);
   }
   var css = '\
-.dz{--bg:#0c0c0e;--card:#18181c;--card2:#1f1f24;--line:#28282e;--tx:#f3f3f5;--mut:#9a9aa6;--ac:' + AC + ';--ok:#3ecf8e;--bad:#ff6b6b;--warn:#f5b94a;--bd:#3a3a42;\
+.dz{--bg:' + FUNDO + ';--card:#18181c;--card2:#1f1f24;--line:#28282e;--tx:#f3f3f5;--mut:#9a9aa6;--ac:' + AC + ';--ok:#3ecf8e;--bad:#ff6b6b;--warn:#f5b94a;--bd:#3a3a42;\
 container-type:inline-size;max-width:1120px;margin:0 auto;background:var(--bg);color:var(--tx);font-family:Poppins,system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;line-height:1.45;padding:20px;border-radius:14px;position:relative;min-height:300px;box-sizing:border-box}\
 .dz *{box-sizing:border-box}\
 .dz h1{font-size:22px;font-weight:600;margin:0}.dz h2{font-size:17px;font-weight:600;margin:0 0 4px}.dz h3{font-size:15px;font-weight:600;margin:0 0 6px}\
@@ -210,6 +212,20 @@ container-type:inline-size;max-width:1120px;margin:0 auto;background:var(--bg);c
 .dz .ccard .cn{font-weight:500;margin:4px 0 8px;word-break:normal;overflow-wrap:break-word}\
 .dz .ccard .cg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px}\
 .dz .ccard .cg b{display:block;font-size:14.5px;color:var(--tx)}.dz .ccard .cg span{color:var(--mut)}\
+.dz.claro{--card:#ffffff;--card2:#f5f5f7;--line:#e2e2e7;--tx:#16161a;--mut:#6a6a75;--bd:#cfcfd6;--ok:#12a065;--bad:#e5484d;--warn:#c27d0e}\
+.dz.claro .ll{border-top-color:#a0a0aa}.dz.claro .ll.now,.dz.claro .ll.proj{border-top-color:var(--ac)}\
+.dz.claro .note,.dz.claro details.alert>summary{color:#7a5410}\
+.dz.claro table.ct th.old,.dz.claro table.ct td.old{background:#f2f2f5}.dz.claro table.ct th.old{background:#eaeaee}\
+.dz.claro table.ct tr.grp th.old{border-top-color:#c4c4cc}\
+.dz.claro table.ct td.now{background:color-mix(in srgb,var(--ac) 5%,#fff)}.dz.claro table.ct th.now{background:color-mix(in srgb,var(--ac) 10%,#fff)}\
+.dz.claro table.ct tbody tr:hover td{filter:brightness(.97)}\
+.dz.claro .nt .ntx{background:#fff;color:#4a4a55;box-shadow:0 10px 30px rgba(0,0,0,.15)}\
+.dz.claro .vf .fog{border-color:#c4c4cc}\
+.dz.claro .tipbg{fill:#fff;stroke:#d0d0d6}.dz.claro .tiptx{fill:#16161a}\
+.dz.claro .axis{fill:#7a7a85}.dz.claro .grid-l{stroke:#ececf0}\
+.dz.claro .tw.scroll:not(.end)::after{background:linear-gradient(90deg,transparent,rgba(0,0,0,.10))}\
+.dz.claro .btn.pri,.dz.claro .seg button.on{color:#fff}\
+.dz.claro .card,.dz.claro .tw{box-shadow:0 1px 2px rgba(0,0,0,.04)}\
 .dz .brow{margin:10px 0}.dz .brow .bl{display:flex;justify-content:space-between;gap:10px;font-size:13px;margin-bottom:4px}\
 .dz .brow .bl span:first-child{overflow-wrap:break-word;min-width:0}.dz .brow .bl span:last-child{color:var(--mut);white-space:nowrap}\
 .dz .form{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}\
@@ -393,7 +409,7 @@ var SALE_TYPES = (function () {
     if (typeof r === 'string') r = [r, r];
     var lst = function (v) { return (v || []).map(norm).filter(Boolean); };
     out[id] = { id: id, nome: x.nome || id, um: r[0] || 'venda', varios: r[1] || r[0] || 'vendas', acao: x.etapaFinal || null,
-      termos: lst(x.termos), receita: x.receita !== false, etapas: x.etapas || {},
+      termos: lst(x.termos), receita: x.receita !== false, evento: x.evento === 'leads' ? 'leads' : 'purchases', etapas: x.etapas || {},
       gFinal: lst(x.acoesGoogle), gCheckout: lst(x.acoesGoogleCheckout), gCart: lst(x.acoesGoogleCarrinho) };
   });
   return out;
@@ -711,6 +727,9 @@ function applySaleTypes() {
   STATE.rows.forEach(function (r) {
     var T = SALE_TYPES[r.funnel]; if (!T) return;
     if (!T.receita) r.revenue = 0;
+    /* Tipo cujo pixel registra o resultado como Lead (ex: assinatura com
+       cadastro): o lead vira o resultado do funil, sem contar em dobro. */
+    if (T.evento === 'leads' && r.platform === 'meta') { r.purchases = r.leads; r.leads = 0; r.cart = 0; r.checkout = 0; }
     if (r.platform !== 'google' || !STATE.gconv.length || !(T.gFinal.length || T.gCheckout.length || T.gCart.length)) return;
     var k = r.date + '|' + norm(r.campaign), list = done[k] ? [] : (gc[k] || []);
     done[k] = 1;
@@ -1103,7 +1122,7 @@ function hasCrmSource() { return (D.fontes || []).some(function (f) { return (f.
 function hasSocialSource() { return (D.fontes || []).some(function (f) { return f.tipo === 'social' || f.tipo === 'engajamento'; }); }
 
 function shell() {
-  ROOT.classList.add('dz');
+  ROOT.classList.add('dz'); if (CLARO) ROOT.classList.add('claro');
   var initial = String(D.cliente || 'D').trim().charAt(0).toUpperCase();
   var logo = D.logo ? '<div class="logo img"><img src="' + esc(D.logo) + '" alt="' + esc(D.cliente || '') + '"></div>' : '<div class="logo">' + esc(initial) + '</div>';
   ROOT.innerHTML =
@@ -1250,11 +1269,11 @@ function drawChart(el, o) {
   var every = Math.ceil(n / (narrow ? 5 : 8));
   o.labels.forEach(function (l, i) { if (!l || (i % every !== 0 && i !== n - 1)) return; var t = svgEl('text', { class: 'axis', x: X(i), y: H - 8, 'text-anchor': i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle' }); t.textContent = l; svg.appendChild(t); });
   function path(s) { var d = '', on = false; s.forEach(function (v, i) { if (!ok(v)) { on = false; return; } d += (on ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1) + ' '; on = true; }); return d; }
-  svg.appendChild(svgEl('path', { d: path(o.prev), fill: 'none', stroke: '#5c5c66', 'stroke-width': 1.6, 'stroke-dasharray': '4 4' }));
+  svg.appendChild(svgEl('path', { d: path(o.prev), fill: 'none', stroke: CLARO ? '#a6a6b0' : '#5c5c66', 'stroke-width': 1.6, 'stroke-dasharray': '4 4' }));
   if (o.proj) svg.appendChild(svgEl('path', { d: path(o.proj), fill: 'none', stroke: AC, 'stroke-width': 2, 'stroke-dasharray': '2 5', opacity: 0.8 }));
   svg.appendChild(svgEl('path', { d: path(o.now), fill: 'none', stroke: AC, 'stroke-width': 2.6, 'stroke-linejoin': 'round' }));
   // Toque/mouse: linha vertical mostrando o dia atual E o dia correspondente do período anterior
-  var guide = svgEl('line', { y1: T, y2: T + PH, stroke: '#77777f', 'stroke-width': 1, style: 'visibility:hidden' });
+  var guide = svgEl('line', { y1: T, y2: T + PH, stroke: CLARO ? '#b0b0b8' : '#77777f', 'stroke-width': 1, style: 'visibility:hidden' });
   var dNow = svgEl('circle', { r: 4.5, fill: AC, style: 'visibility:hidden' }), dPrev = svgEl('circle', { r: 4, fill: '#9a9aa6', style: 'visibility:hidden' });
   var tip = svgEl('g', { style: 'visibility:hidden;pointer-events:none' }), bg = svgEl('rect', { class: 'tipbg', rx: 8, ry: 8 });
   var lines = [0, 1, 2].map(function (k) { var t = svgEl('text', { class: 'tiptx', 'font-weight': k === 0 ? 600 : 400 }); tip.appendChild(t); return t; });
@@ -1816,7 +1835,7 @@ function donutHTML(entries, answered) {
   });
   return '<div class="donut"><svg viewBox="0 0 ' + S + ' ' + S + '" width="' + S + '" height="' + S + '" style="width:' + S + 'px;height:' + S + 'px;flex:0 0 auto;display:block">' +
     paths +
-    '<text x="' + cx + '" y="' + (cy - 1) + '" text-anchor="middle" fill="#fff" font-size="21" font-weight="600">' + answered + '</text>' +
+    '<text x="' + cx + '" y="' + (cy - 1) + '" text-anchor="middle" style="fill:var(--tx)" font-size="21" font-weight="600">' + answered + '</text>' +
     '<text x="' + cx + '" y="' + (cy + 16) + '" text-anchor="middle" fill="#9a9aa6" font-size="11">' + L('respostas', 'respuestas') + '</text></svg>' +
     '<div class="dleg">' + legend + '</div></div>';
 }
