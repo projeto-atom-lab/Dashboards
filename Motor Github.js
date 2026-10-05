@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.11.1';
+var VERSION = '1.12.0';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -410,7 +410,7 @@ var SALE_TYPES = (function () {
     var lst = function (v) { return (v || []).map(norm).filter(Boolean); };
     out[id] = { id: id, nome: x.nome || id, um: r[0] || 'venda', varios: r[1] || r[0] || 'vendas', acao: x.etapaFinal || null,
       termos: lst(x.termos), receita: x.receita !== false, evento: x.evento === 'leads' ? 'leads' : 'purchases', etapas: x.etapas || {},
-      gFinal: lst(x.acoesGoogle), gCheckout: lst(x.acoesGoogleCheckout), gCart: lst(x.acoesGoogleCarrinho) };
+      mensal: +x.mensalidade || 0, gFinal: lst(x.acoesGoogle), gCheckout: lst(x.acoesGoogleCheckout), gCart: lst(x.acoesGoogleCarrinho) };
   });
   return out;
 })();
@@ -1548,6 +1548,94 @@ function bindWhy(host) {
   });
 }
 
+
+/* ============================== CUSTO POR RESULTADO E META COM PRAZO ============================== */
+/* Base "agora": últimos 30 dias com dado. Faixa: custo por resultado semana a
+   semana nas últimas 8 semanas (quartis), para mostrar quanto ele oscila. */
+function costBase(f) {
+  var rk = RESULT(f), end = lastDataDate() || addDays(todayISO(), -1), ext = function (r) { return r.funnel === f; };
+  var s30 = agg(filtered(addDays(end, -29), end, ext)), sP = agg(filtered(addDays(end, -59), addDays(end, -30), ext));
+  var weeks = [];
+  for (var w = 0; w < 8; w++) { var wt = addDays(end, -7 * w), wk = agg(filtered(addDays(wt, -6), wt, ext)); if (wk[rk] >= 3 && wk.spend > 0) weeks.push(wk.spend / wk[rk]); }
+  var cpr = s30[rk] > 0 ? s30.spend / s30[rk] : null, lo = null, hi = null;
+  /* Semanas com menos de 3 resultados ficam de fora (1 resultado numa semana
+     fraca distorce tudo), e a faixa fica limitada a 30% abaixo e 50% acima do
+     custo atual. */
+  if (cpr && weeks.length >= 3) { lo = Math.min(Math.max(quantile(weeks, 0.25), cpr * 0.7), cpr); hi = Math.max(Math.min(quantile(weeks, 0.75), cpr * 1.5), cpr); }
+  return {
+    end: end, res30: s30[rk], spend30: s30.spend, cpr: cpr,
+    cprPrev: sP[rk] > 0 ? sP.spend / sP[rk] : null, lo: lo, hi: hi,
+    tax: taxShare(f, { from: addDays(end, -29), to: end })
+  };
+}
+function goalFunnels() { return funnelsPresent().filter(function (f) { return f !== 'outros' && f !== 'trafego' && RESULT(f); }); }
+function goalHTML(per) {
+  var fs = goalFunnels(); if (!fs.length) return '';
+  var B = {}; fs.forEach(function (f) { B[f] = costBase(f); });
+  // 1) quanto custa cada resultado
+  var html = '<div class="card hl"><h2>💵 ' + L('Quanto custa cada resultado', 'Cuánto cuesta cada resultado') + '</h2>' +
+    '<p class="mut">' + L('Últimos 30 dias com dados (até ', 'Últimos 30 días con datos (hasta ') + fmtD(B[fs[0]].end) + L('). A faixa mostra como o custo variou semana a semana nas últimas 8 semanas. Valores sem o imposto da plataforma.', '). El rango muestra cómo varió el costo semana a semana en las últimas 8 semanas. Valores sin el impuesto de la plataforma.') + '</p>' +
+    tableWrap('<table><thead><tr><th>' + L('Resultado', 'Resultado') + '</th><th>' + L('Custo por resultado', 'Costo por resultado') + '</th><th>' + L('30 dias antes', '30 días antes') + '</th><th>' + L('Faixa semanal', 'Rango semanal') + '</th><th>' + L('Ritmo atual', 'Ritmo actual') + '</th></tr></thead><tbody>' +
+    fs.map(function (f) {
+      var b = B[f], d = deltaTxt(b.cpr, b.cprPrev);
+      return '<tr><td><b>' + FNAME(f) + '</b><br><small class="mut">' + L('por ', 'por ') + RNAME(f, false) + '</small></td><td><b>' + money(b.cpr) + '</b>' + (d ? ' <small class="' + (d.v <= 0 ? 'up' : 'down') + '">' + d.txt + '</small>' : '') + '</td><td>' + money(b.cprPrev) + '</td>' +
+        '<td>' + (b.lo != null ? money(b.lo) + ' a ' + money(b.hi) : '<small class="mut">' + L('pouco histórico', 'poco historial') + '</small>') + '</td><td>' + count(b.res30) + ' ' + RNAME(f, Math.round(b.res30) !== 1) + L(' / 30 dias', ' / 30 días') + '</td></tr>';
+    }).join('') + '</tbody></table>') + '</div>';
+
+  // 2) meta com prazo
+  var g = Object.assign({ f: fs[0], qtd: 100, ate: '' }, store.get('goal', {}));
+  if (fs.indexOf(g.f) < 0) g.f = fs[0];
+  var hoje = todayISO();
+  if (!g.ate || g.ate <= hoje) { var dez = hoje.slice(0, 4) + '-12-31'; g.ate = daysBetween(hoje, dez) >= 21 ? dez : addDays(hoje, 90); }
+  var f = g.f, b = B[f], T = SALE_TYPES[f], dias = Math.max(daysBetween(hoje, g.ate) + 1, 1), qtd = Math.max(+g.qtd || 0, 0);
+  html += '<div class="card hl"><h2>🎯 ' + L('Quanto investir para chegar numa meta', 'Cuánto invertir para llegar a una meta') + '</h2>' +
+    '<p class="mut">' + L('Diga quantos resultados a mais você quer e até quando. A conta usa o custo real das campanhas e já soma o imposto da plataforma.', 'Decí cuántos resultados más querés y hasta cuándo. La cuenta usa el costo real de las campañas y ya suma el impuesto de la plataforma.') + '</p>' +
+    (fs.length > 1 ? '<div class="seg" data-gseg="f">' + fs.map(function (x) { return '<button data-v="' + x + '" class="' + (x === f ? 'on' : '') + '">' + FNAME(x) + '</button>'; }).join('') + '</div>' : '') +
+    '<div class="form" style="margin:6px 0 4px"><label>' + L('Quantidade de ', 'Cantidad de ') + RNAME(f) + L(' a mais', ' adicionales') + '<input type="number" min="1" step="1" data-g="qtd" value="' + qtd + '"></label>' +
+    '<label>' + L('Até quando?', '¿Hasta cuándo?') + '<input type="date" data-g="ate" value="' + g.ate + '" min="' + addDays(hoje, 1) + '"></label></div>';
+  if (!(b.cpr > 0)) {
+    html += '<div class="verdict neu">' + L('Ainda não há ', 'Todavía no hay ') + RNAME(f) + L(' nos últimos 30 dias para calcular o custo.', ' en los últimos 30 días para calcular el costo.') + '</div></div>';
+    return html;
+  }
+  var ritmoMes = b.res30, precisaMes = qtd / dias * 30, mult = ritmoMes > 0 ? precisaMes / ritmoMes : null;
+  /* Escalar custa: os públicos mais baratos se esgotam primeiro. Hipótese
+     declarada: +15% (provável) e +30% (cauteloso) a cada vez que o volume
+     dobra em relação ao ritmo atual. O otimista não aplica esse efeito. */
+  var esc2 = mult && mult > 1 ? Math.log(mult) / Math.LN2 : 0;
+  var cen = [
+    { k: 'O', n: L('Otimista', 'Optimista'), cpr: Math.min(b.lo || b.cpr * 0.85, b.cpr), how: L('custo das melhores semanas, sem efeito de escala', 'costo de las mejores semanas, sin efecto de escala') },
+    { k: 'R', n: L('Provável', 'Probable'), cpr: b.cpr * (1 + 0.15 * esc2), how: L('custo atual', 'costo actual') + (esc2 ? L(' + 15% a cada vez que o volume dobra', ' + 15% cada vez que el volumen se duplica') : '') },
+    { k: 'P', n: L('Cauteloso', 'Cauteloso'), cpr: Math.max(b.hi || b.cpr * 1.2, b.cpr) * (1 + 0.30 * esc2), how: L('custo das piores semanas', 'costo de las peores semanas') + (esc2 ? L(' + 30% a cada vez que o volume dobra', ' + 30% cada vez que el volumen se duplica') : '') }
+  ];
+  cen.forEach(function (c) { c.cprT = c.cpr * (1 + b.tax); c.tot = c.cprT * qtd; c.mes = c.tot / dias * 30; c.dia = c.tot / dias; });
+  var R = cen[1];
+  html += '<p class="hero" style="font-size:16px;margin:14px 0 6px">' + L('Para ', 'Para ') + '<b>' + nf(qtd, 0) + ' ' + RNAME(f, qtd !== 1) + '</b>' + L(' até ', ' hasta ') + fmtD(g.ate, 1) + ' (' + plural(dias, L('dia', 'día'), L('dias', 'días')) + L('), o investimento provável é de ', '), la inversión probable es de ') + '<b>' + money(R.tot) + '</b>' +
+    L(', cerca de ', ', cerca de ') + '<b>' + money(R.mes) + L(' por mês', ' por mes') + '</b> (' + money(R.dia) + L(' por dia', ' por día') + ').</p>' +
+    '<p class="mut" style="margin:0 0 12px">' + L('Faixa: de ', 'Rango: de ') + money(cen[0].tot) + L(' a ', ' a ') + money(cen[2].tot) + L(' no total.', ' en total.') + '</p>' +
+    tableWrap('<table><thead><tr><th>' + L('Cenário', 'Escenario') + '</th><th>' + L('Custo por ', 'Costo por ') + RNAME(f, false) + '</th><th>' + L('Total', 'Total') + '</th><th>' + L('Por mês', 'Por mes') + '</th><th>' + L('Por dia', 'Por día') + '</th></tr></thead><tbody>' +
+    cen.map(function (c) { return '<tr><td><b>' + c.n + '</b><br><small class="mut">' + c.how + '</small></td><td>' + money(c.cprT) + '</td><td><b>' + money(c.tot) + '</b></td><td>' + money(c.mes) + '</td><td>' + money(c.dia) + '</td></tr>'; }).join('') + '</tbody></table>');
+  // ritmo
+  if (mult != null) {
+    var cls = mult > 2 ? 'bad' : mult > 1.2 ? 'neu' : 'good';
+    html += '<div class="verdict ' + cls + '"><div class="big">' + (mult <= 1.05 ? L('Cabe no ritmo atual', 'Entra en el ritmo actual') : L('Precisa de ', 'Necesita ') + nf(mult, 1) + L('x o ritmo atual', 'x el ritmo actual')) + '</div>' +
+      L('Hoje: ', 'Hoy: ') + '<b>' + nf(ritmoMes, 0) + '</b> ' + RNAME(f) + L(' a cada 30 dias, com ', ' cada 30 días, con ') + money(b.spend30) + L(' investidos. A meta pede uns ', ' invertidos. La meta pide unos ') + '<b>' + nf(Math.ceil(precisaMes), 0) + L(' por mês', ' por mes') + '</b>.' +
+      (mult > 2 ? '<br><small>' + L('Escalar mais que o dobro costuma encarecer cada resultado. Vale subir a verba em etapas e medir o custo na primeira quinzena antes de confirmar o restante.', 'Escalar más del doble suele encarecer cada resultado. Conviene subir la inversión por etapas y medir el costo en la primera quincena antes de confirmar el resto.') + '</small>' : '') + '</div>';
+  }
+  // retorno de assinatura
+  if (T && T.mensal > 0) {
+    var meses = R.cprT / T.mensal;
+    html += '<div class="verdict good"><div class="big">' + L('Cada ', 'Cada ') + RNAME(f, false) + L(' se paga em ', ' se paga en ') + nf(Math.max(meses, 0.1), meses < 10 ? 1 : 0) + L(' meses', ' meses') + '</div>' +
+      L('Custo provável de ', 'Costo probable de ') + money(R.cprT) + L(' contra mensalidade de ', ' contra cuota mensual de ') + money(T.mensal) + '. ' + L('A partir daí, cada mês de permanência é retorno.', 'Desde ahí, cada mes de permanencia es retorno.') + '</div>';
+  }
+  html += '<p class="mut" style="font-size:12px;margin-top:10px">' + L('É uma estimativa a partir do desempenho recente: muda se a oferta, o criativo ou a sazonalidade mudarem. O número a mais é contado a partir de hoje.', 'Es una estimación a partir del rendimiento reciente: cambia si cambian la oferta, el creativo o la estacionalidad. El número adicional se cuenta desde hoy.') + '</p></div>';
+  return html;
+}
+function bindGoal(v, per) {
+  function save(k, val) { var g = store.get('goal', {}); g[k] = val; store.set('goal', g); renderSim(per); enhanceTables(); reportHeight(); }
+  $$('[data-gseg] button', v).forEach(function (b) { b.onclick = function () { save('f', b.dataset.v); }; });
+  $$('input[data-g]', v).forEach(function (el) { el.onchange = function () { save(el.dataset.g, el.dataset.g === 'qtd' ? Math.max(1, Math.round(+el.value || 0)) : el.value); }; });
+}
+
 /* ============================== SIMULADOR ============================== */
 function simFunnels() { return funnelsPresent().filter(function (f) { return isSale(f) || f === 'cadastro' || f === 'whatsapp'; }); }
 function simDefaults(per) {
@@ -1583,7 +1671,7 @@ function renderSim(per) {
     return '<div class="q"><div class="ql"><span>' + label + '</span><b data-show="' + key + '">' + shown + '</b></div>' + (help ? '<small class="mut">' + help + '</small>' : '') +
       '<div class="inp' + (pref ? ' hasp' : '') + '">' + pref + '<input type="text" inputmode="decimal" data-s="' + key + '" data-kind="' + (kind || 'num') + '" value="' + (val ? nf(val, 0) : '') + '"></div></div>';
   }
-  var html = '<div class="card hl"><h2>🧭 ' + L('Simule o mês', 'Simulá el mes') + '</h2><p class="mut">' + L('Responda com os números do seu negócio. O resto vem dos resultados reais das campanhas. Nada do que você mexer aqui altera as campanhas — fica salvo só neste aparelho.', 'Respondé con los números de tu negocio. El resto viene de los resultados reales de las campañas. Nada de lo que muevas acá cambia las campañas — queda guardado solo en este dispositivo.') + '</p>';
+  var html = goalHTML(per) + '<div class="sec" style="margin-top:26px">' + L('Outra pergunta', 'Otra pregunta') + '</div><div class="card"><h2>🧭 ' + L('E se eu investir um valor por mês?', '¿Y si invierto un monto por mes?') + '</h2><p class="mut">' + L('Responda com os números do seu negócio. O resto vem dos resultados reais das campanhas. Nada do que você mexer aqui altera as campanhas — fica salvo só neste aparelho.', 'Respondé con los números de tu negocio. El resto viene de los resultados reales de las campañas. Nada de lo que muevas acá cambia las campañas — queda guardado solo en este dispositivo.') + '</p>';
   if (fs.length > 1) html += '<div class="seg" data-seg="funil">' + fs.map(function (x) { return '<button data-v="' + x + '" class="' + (x === f ? 'on' : '') + '">' + FNAME(x) + '</button>'; }).join('') + '</div>';
   html += q('verba', '💰 ' + L('Quanto vai investir no mês?', '¿Cuánto vas a invertir en el mes?'), sim.verba, money(sim.verba), L('Total pago às plataformas.', 'Total pagado a las plataformas.'), null, 'money') +
     q('ticket', '🧾 ' + L('Quanto vale uma venda, em média?', '¿Cuánto vale una venta, en promedio?'), sim.ticket, sim.ticket ? money(sim.ticket) : '—', tkReal ? L('Nas vendas do site no período, a média foi ', 'En las ventas del período, el promedio fue ') + money(tkReal) + '.' : '', null, 'money') +
@@ -1669,6 +1757,7 @@ function renderSim(per) {
   }
   v.innerHTML = html;
   bindSim(v, per);
+  bindGoal(v, per);
 }
 function scenTable(SR, sim, saleRate, tax, saleReal, rn, rn1, f) {
   var P = project(SR.P, sim, saleRate, tax), R = project(SR.R, sim, saleRate, tax), O = project(SR.O, sim, saleRate, tax);
