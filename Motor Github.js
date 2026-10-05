@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.11.0';
+var VERSION = '1.11.1';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -1401,9 +1401,11 @@ var LEVELS = function () { return [L('Mídia', 'Medios'), L('Contato gerado', 'C
 function ladder(F) {
   if (!isSale(F.f)) return LEVELS().map(function (l, i) { return [l, F.level > i]; });
   var T = SALE_TYPES[F.f];
-  return [[L('Mídia', 'Medios'), true], [L('Acesso ao site', 'Acceso al sitio'), F.cur.clicks + F.prev.clicks > 0],
-    [L('Início do pagamento', 'Inicio del pago'), !!F.by.checkout],
-    [T ? L('Registro de ', 'Registro de ') + T.varios : L('Venda registrada', 'Venta registrada'), F.cur.purchases + F.prev.purchases > 0]];
+  var out = [[L('Mídia', 'Medios'), true], [L('Acesso ao site', 'Acceso al sitio'), F.cur.clicks + F.prev.clicks > 0]];
+  // tipo sem pagamento (cadastro gratuito): a etapa de pagamento não existe
+  if (!T || T.evento !== 'leads') out.push([L('Início do pagamento', 'Inicio del pago'), !!F.by.checkout]);
+  out.push([T ? L('Registro de ', 'Registro de ') + T.varios : L('Venda registrada', 'Venta registrada'), F.cur.purchases + F.prev.purchases > 0]);
+  return out;
 }
 function missingLine(key) {
   return ({
