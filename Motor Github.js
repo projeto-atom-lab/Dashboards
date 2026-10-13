@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.12.0';
+var VERSION = '1.13.0';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -1129,6 +1129,7 @@ function shell() {
     '<div class="head"><div><div class="brand"><div class="logo">' + esc(initial) + '</div><h1>' + esc(D.cliente || '') + ' · ' + L('Mídia paga', 'Medios pagos') + '</h1></div>' +
     '<small id="dzUpd"></small></div><div class="row">' +
     (LANGS.length > 1 ? '<div class="pills">' + LANGS.map(function (l) { return '<button class="pill' + (l === LANG ? ' on' : '') + '" data-lang="' + l + '">' + l.toUpperCase() + '</button>'; }).join('') + '</div>' : '') +
+    '<button class="btn" id="dzExport" title="' + esc(L('Baixa um arquivo de texto com os dados do período e filtros exibidos agora — pronto para colar em uma IA ou guardar.', 'Descarga un archivo de texto con los datos del período y los filtros que se ven ahora — listo para pegar en una IA o guardar.')) + '">⬇ ' + L('Exportar', 'Exportar') + '</button>' +
     '<button class="btn pri" id="dzReload">↻ ' + L('Atualizar', 'Actualizar') + '</button></div></div>' +
     '<div class="card"><div class="pills" id="dzPresets">' +
     [['7', L('7 dias', '7 días')], ['14', L('14 dias', '14 días')], ['30', L('30 dias', '30 días')], ['mtd', L('Este mês', 'Este mes')], ['lastmonth', L('Mês passado', 'Mes pasado')], ['custom', L('Escolher datas', 'Elegir fechas')]].map(function (p) { return '<button class="pill" data-p="' + p[0] + '">' + p[1] + '</button>'; }).join('') +
@@ -1143,6 +1144,7 @@ function shell() {
 }
 function bindShell() {
   $('#dzReload').onclick = function () { run(); };
+  $('#dzExport').onclick = function () { doExport(this); };
   $$('[data-lang]').forEach(function (b) { b.onclick = function () { LANG = b.dataset.lang; store.set('lang', LANG); shell(); renderAll(); }; });
   $$('#dzPresets .pill').forEach(function (b) { b.onclick = function () { STATE.preset = b.dataset.p; store.set('preset', STATE.preset); renderAll(); }; });
   $('#dzFrom').onchange = $('#dzTo').onchange = function () { STATE.from = $('#dzFrom').value; STATE.to = $('#dzTo').value; if (STATE.from && STATE.to) renderAll(); };
@@ -2240,6 +2242,114 @@ function renderDiag() {
   v.innerHTML = html;
   $$('[data-save]', v).forEach(function (b) { b.onclick = function () { store.set('paste_' + b.dataset.save, $('[data-paste="' + b.dataset.save + '"]', v).value); run(); }; });
   $$('[data-clear]', v).forEach(function (b) { b.onclick = function () { store.del('paste_' + b.dataset.clear); run(); }; });
+}
+
+/* ============================== EXPORTAR (dados do período exibido) ============================== */
+/* Gera um .md com exatamente o que está sendo mostrado — período, filtros, totais, funis,
+   campanhas, CRM e redes sociais — para colar em uma IA ou guardar fora do dashboard.
+   Nada aqui é recalculado em outra lógica: usa as mesmas funções (agg, filtered, buildFunnel,
+   socAgg...) que já alimentam as abas, então o export nunca diverge do que a tela mostra. */
+function exportText(per) {
+  var L1 = 'antes', L2 = 'antes';
+  var lines = [];
+  lines.push('# ' + (D.cliente || '') + ' — ' + L('Exportação do dashboard de mídia paga', 'Exportación del dashboard de medios pagos'));
+  lines.push(L('Gerado em', 'Generado el') + ': ' + new Date().toLocaleString(LOC()));
+  lines.push(L('Período atual', 'Período actual') + ': ' + per.from + ' a ' + per.to);
+  lines.push(L('Período anterior (comparação)', 'Período anterior (comparación)') + ': ' + per.pFrom + ' a ' + per.pTo);
+  if (STATE.plat !== 'all') lines.push(L('Plataforma filtrada', 'Plataforma filtrada') + ': ' + STATE.plat);
+  if (STATE.acct !== 'all') lines.push(L('Conta filtrada', 'Cuenta filtrada') + ': ' + STATE.acct);
+  lines.push('');
+
+  var cur = agg(filtered(per.from, per.to)), prev = agg(filtered(per.pFrom, per.pTo));
+  function row(label, c, p, fmt) {
+    fmt = fmt || count;
+    var d = deltaTxt(c, p);
+    lines.push('- ' + label + ': ' + fmt(c) + (p != null ? ' (' + L(L1, L2) + ': ' + fmt(p) + (d ? ', ' + d.txt : '') + ')' : ''));
+  }
+  lines.push('## ' + L('Totais de mídia paga', 'Totales de medios pagos'));
+  row(L('Investimento', 'Inversión'), cur.spend, prev.spend, money);
+  row(L('Impressões', 'Impresiones'), cur.impressions, prev.impressions);
+  row(L('Cliques', 'Clics'), cur.clicks, prev.clicks);
+  if (cur.impressions) row('CTR', cur.clicks / cur.impressions, prev.impressions ? prev.clicks / prev.impressions : null, pctf);
+  if (cur.clicks) row('CPC', cur.spend / cur.clicks, prev.clicks ? prev.spend / prev.clicks : null, money);
+  if (cur.impressions) row('CPM', cur.spend / cur.impressions * 1000, prev.impressions ? prev.spend / prev.impressions * 1000 : null, money);
+  lines.push('');
+
+  lines.push('## ' + L('Funis', 'Embudos'));
+  funnelsPresent().forEach(function (f) {
+    if (f === 'outros') return;
+    var F = buildFunnel(f, per), rk = F.resKey, c = F.cur[rk], p = F.prev[rk];
+    lines.push('### ' + FNAME(f));
+    lines.push('- ' + L('Investido', 'Invertido') + ': ' + money(F.cur.spend) + (F.prev.spend ? ' (' + L(L1, L2) + ': ' + money(F.prev.spend) + ')' : ''));
+    lines.push('- ' + RNAME(f) + ': ' + count(c) + (p != null ? ' (' + L(L1, L2) + ': ' + count(p) + ')' : ''));
+    if (c) lines.push('- ' + L('Custo por', 'Costo por') + ' ' + RNAME(f, false) + ': ' + money(F.cur.spend / c));
+    if (isSale(f) && STATE.has.revenue) lines.push('- ' + L('Receita', 'Ingresos') + ': ' + money(F.cur.revenue) + ' · ROAS ' + xf(F.cur.roas));
+    lines.push('');
+  });
+
+  var campRows = filtered(per.from, per.to), byC = {};
+  campRows.forEach(function (r) {
+    var o = byC[r.key] || (byC[r.key] = { campaign: r.campaign, platform: r.platform, account: r.account, spend: 0, impressions: 0, clicks: 0, leads: 0, purchases: 0, conversations: 0 });
+    ['spend', 'impressions', 'clicks', 'leads', 'purchases', 'conversations'].forEach(function (f) { o[f] += r[f] || 0; });
+  });
+  var cList = Object.keys(byC).map(function (k) { return byC[k]; }).sort(function (a, b) { return b.spend - a.spend; });
+  if (cList.length) {
+    lines.push('## ' + L('Campanhas no período', 'Campañas en el período'));
+    lines.push([L('Campanha', 'Campaña'), L('Plataforma', 'Plataforma'), L('Investimento', 'Inversión'), L('Impressões', 'Impresiones'), L('Cliques', 'Clics'), 'Leads', L('Compras', 'Compras'), L('Conversas', 'Conversaciones')].join(' | '));
+    lines.push('---|---|---|---|---|---|---|---');
+    cList.forEach(function (o) {
+      lines.push([o.campaign, o.platform, money(o.spend), count(o.impressions), count(o.clicks), count(o.leads), count(o.purchases), count(o.conversations)].join(' | '));
+    });
+    lines.push('');
+  }
+
+  if (STATE.crm.length) {
+    var crmNow = crmIn(per.from, per.to), crmPrev = crmIn(per.pFrom, per.pTo);
+    var qual = crmNow.filter(function (c) { return c.qual; }).length, sale = crmNow.filter(function (c) { return c.sale; }).length;
+    lines.push('## CRM');
+    lines.push('- ' + L('Contatos no período', 'Contactos en el período') + ': ' + crmNow.length + (crmPrev.length ? ' (' + L(L1, L2) + ': ' + crmPrev.length + ')' : ''));
+    lines.push('- ' + L('Qualificados', 'Calificados') + ': ' + qual + ' · ' + L('Vendas', 'Ventas') + ': ' + sale);
+    lines.push('');
+  }
+
+  if (hasSocial()) {
+    lines.push('## ' + L('Redes sociais (orgânico)', 'Redes sociales (orgánico)'));
+    Object.keys(STATE.socRedes).forEach(function (rede) {
+      var rows = socIn(per.from, per.to, function (r) { return r.rede === rede; });
+      if (!rows.length) return;
+      var a = socAgg(rows), gain = followersGain(rede, per.from, per.to);
+      lines.push('### ' + rede);
+      lines.push('- ' + L('Visualizações', 'Visualizaciones') + ': ' + count(a.views) + ' · ' + L('Interações', 'Interacciones') + ': ' + count(a.interactions));
+      if (gain != null) lines.push('- ' + L('Novos seguidores', 'Nuevos seguidores') + ': ' + count(gain));
+      lines.push('');
+    });
+  }
+
+  lines.push('## ' + L('Diagnóstico das fontes', 'Diagnóstico de las fuentes'));
+  STATE.sources.forEach(function (s) {
+    var st = s.status || {};
+    lines.push('- ' + (s.nome || s.conta || s.plataforma || s.tipo) + ': ' + (st.ok ? (count(st.rows) + L(' linhas', ' filas') + (st.dup ? ' · ' + st.dup + L(' duplicadas ignoradas', ' duplicadas ignoradas') : '')) : (L('erro: ', 'error: ') + (st.error || ''))));
+  });
+  lines.push('');
+  lines.push('---');
+  lines.push(L('Exportado do dashboard de mídia paga', 'Exportado del dashboard de medios pagos') + ' (' + (D.cliente || '') + ') · motor v' + VERSION + ' · ' + (typeof window !== 'undefined' && window.location ? window.location.href : ''));
+  return lines.join('\n');
+}
+function doExport(btn) {
+  try {
+    var per = resolvePeriod();
+    var text = exportText(per);
+    var blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = CLIENT_KEY + '_' + per.from + '_a_' + per.to + '.md';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+    if (btn) { var t = btn.textContent; btn.textContent = '✓ ' + L('Exportado', 'Exportado'); setTimeout(function () { btn.textContent = t; }, 1800); }
+  } catch (e) {
+    if (window.console) console.error(e);
+    alert(L('Não deu para exportar: ', 'No se pudo exportar: ') + e.message);
+  }
 }
 
 /* ============================== ORQUESTRAÇÃO ============================== */
