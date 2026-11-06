@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.15.0';
+var VERSION = '1.16.0';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -515,7 +515,7 @@ var STATE = {
   preset: store.get('preset', 'mtd'), from: null, to: null, incToday: false,
   plat: 'all', acct: 'all', chartMetric: 'spend', sort: { col: 'spendNow', dir: -1 },
   loadedAt: null
-};
+, cmp: store.get('cmp', { k: 'prev' })};
 
 /* ============================== PROCESSAMENTO POR FONTE ============================== */
 function processMedia(src, text) {
@@ -833,8 +833,17 @@ function resolvePeriod() {
   else if (p === 'mtd') { from = monthStart(today); to = end < from ? from : end; pFrom = prevMonthStart(today); pTo = addDays(from, -1); }
   else if (p === 'lastmonth') { to = addDays(monthStart(today), -1); from = monthStart(to); pTo = addDays(from, -1); pFrom = monthStart(pTo); }
   else { var len = parseInt(p, 10) || 30; to = end; from = addDays(to, -(len - 1)); pTo = addDays(from, -1); pFrom = addDays(pTo, -(len - 1)); }
-  return { from: from, to: to, pFrom: pFrom, pTo: pTo, len: daysBetween(from, to) + 1, pLen: daysBetween(pFrom, pTo) + 1, isMtd: p === 'mtd' };
+  /* Comparação escolhida (STATE.cmp): período anterior (padrão), mesmo
+     período do ano passado, um mês específico ou datas livres. */
+  var c = STATE.cmp || { k: 'prev' }, cmpK = 'prev';
+  if (c.k === 'yoy') { pFrom = shiftYear(from, -1); pTo = shiftYear(to, -1); cmpK = 'yoy'; }
+  else if (c.k === 'month' && c.m) { pFrom = c.m + '-01'; pTo = monthEnd(pFrom); cmpK = 'month'; }
+  else if (c.k === 'custom' && c.from && c.to) { pFrom = c.from; pTo = c.to; cmpK = 'custom'; }
+  return { from: from, to: to, pFrom: pFrom, pTo: pTo, len: daysBetween(from, to) + 1, pLen: daysBetween(pFrom, pTo) + 1, isMtd: p === 'mtd', cmp: cmpK };
 }
+function shiftYear(iso, n) { var y = +iso.slice(0, 4) + n, md = iso.slice(5); if (md === '02-29') md = '02-28'; return y + '-' + md; }
+function dataMonths() { var set = {}; STATE.rows.forEach(function (r) { if (r.spend > 0) set[r.date.slice(0, 7)] = 1; }); return Object.keys(set).sort().reverse(); }
+var MES_CMP = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 function daySeries(from, to, extra) {
   var map = {}, out = [];
   filtered(from, to, extra).forEach(function (r) { (map[r.date] = map[r.date] || []).push(r); });
@@ -1177,6 +1186,8 @@ function shell() {
     [['7', L('7 dias', '7 días')], ['14', L('14 dias', '14 días')], ['30', L('30 dias', '30 días')], ['mtd', L('Este mês', 'Este mes')], ['lastmonth', L('Mês passado', 'Mes pasado')], ['custom', L('Escolher datas', 'Elegir fechas')]].map(function (p) { return '<button class="pill" data-p="' + p[0] + '">' + p[1] + '</button>'; }).join('') +
     '</div><div class="row" style="margin-top:10px"><span id="dzCustom" style="display:none"><input type="date" id="dzFrom"> → <input type="date" id="dzTo"></span>' +
     '<select id="dzPlat"></select><select id="dzAcct"></select>' +
+    '<label class="mut" style="font-size:12.5px">' + L('Comparar com', 'Comparar con') + ' <select id="dzCmp"></select></label>' +
+    '<span id="dzCmpCustom" style="display:none"><input type="date" id="dzCFrom"> → <input type="date" id="dzCTo"></span>' +
     '<label class="mut" style="font-size:12.5px"><input type="checkbox" id="dzToday"> ' + L('Incluir hoje', 'Incluir hoy') + '</label></div>' +
     '<div id="dzPer" class="mut" style="font-size:12.5px;margin-top:10px"></div></div>' +
     '<div class="hsw tabsw"><div class="tw-hint">' + L('arraste para ver mais abas →', 'deslizá para ver más pestañas →') + '</div><div class="tabs hs" id="dzTabs">' + orderedTabs().map(function (t) { return '<button data-tab="' + t[0] + '">' + t[1]() + '</button>'; }).join('') + '</div></div>' +
@@ -1192,6 +1203,18 @@ function bindShell() {
   $('#dzToday').onchange = function () { STATE.incToday = this.checked; renderAll(); };
   $('#dzPlat').onchange = function () { STATE.plat = this.value; STATE.acct = 'all'; renderAll(); };
   $('#dzAcct').onchange = function () { STATE.acct = this.value; renderAll(); };
+  $('#dzCmp').onchange = function () {
+    var v = this.value;
+    if (v === 'prev' || v === 'yoy') STATE.cmp = { k: v };
+    else if (v === 'custom') { STATE.cmp = { k: 'custom', from: (STATE.cmp && STATE.cmp.from) || '', to: (STATE.cmp && STATE.cmp.to) || '' }; $('#dzCmpCustom').style.display = ''; if (!STATE.cmp.from) return; }
+    else STATE.cmp = { k: 'month', m: v.slice(2) };
+    store.set('cmp', STATE.cmp); renderAll();
+  };
+  $('#dzCFrom').onchange = $('#dzCTo').onchange = function () {
+    var a = $('#dzCFrom').value, b = $('#dzCTo').value; if (!a || !b) return;
+    if (a > b) { var x = a; a = b; b = x; }
+    STATE.cmp = { k: 'custom', from: a, to: b }; store.set('cmp', STATE.cmp); renderAll();
+  };
   $$('#dzTabs button').forEach(function (b) { b.onclick = function () { goTab(b.dataset.tab); }; });
   showTab();
 }
@@ -1407,7 +1430,7 @@ function heroSentence(per, fs) {
   });
   var s = L('Entre ', 'Entre ') + fmtD(per.from) + L(' e ', ' y ') + fmtD(per.to) + L(', foram investidos ', ', se invirtieron ') + '<b>' + money(cur.spend) + '</b>';
   s += parts.length ? L('. Isso gerou ', '. Eso generó ') + parts.join(L(' e ', ' y ')) + '.' : '.';
-  if (cmp) s += ' ' + L('Em relação ao período anterior, o custo por ', 'Respecto al período anterior, el costo por ') + RNAME(cmp.f, false) + ' ' + (cmp.d.v < 0 ? L('caiu ', 'bajó ') : L('subiu ', 'subió ')) + '<b>' + nf(Math.abs(cmp.d.v) * 100, 0) + '%</b>' + (cmp.d.v < 0 ? ' ✓' : '') + '.';
+  if (cmp) s += ' ' + L('Em relação ao período comparado, o custo por ', 'Respecto al período comparado, el costo por ') + RNAME(cmp.f, false) + ' ' + (cmp.d.v < 0 ? L('caiu ', 'bajó ') : L('subiu ', 'subió ')) + '<b>' + nf(Math.abs(cmp.d.v) * 100, 0) + '%</b>' + (cmp.d.v < 0 ? ' ✓' : '') + '.';
   return s;
 }
 function renderOverview(per) {
@@ -2299,7 +2322,19 @@ function syncBar(per) {
   var al = Object.keys(ac).sort();
   $('#dzAcct').style.display = al.length > 1 ? '' : 'none';
   $('#dzAcct').innerHTML = '<option value="all">' + L('Todas as contas', 'Todas las cuentas') + '</option>' + al.map(function (a) { return '<option' + (STATE.acct === a ? ' selected' : '') + '>' + esc(a) + '</option>'; }).join('');
-  $('#dzPer').innerHTML = '<b style="color:var(--tx)">' + fmtD(per.from) + ' → ' + fmtD(per.to) + '</b> · ' + L('comparado com', 'comparado con') + ' ' + fmtD(per.pFrom) + ' → ' + fmtD(per.pTo) + (per.isMtd ? ' (' + L('mês anterior inteiro', 'mes anterior completo') + ')' : '');
+  var c = STATE.cmp || { k: 'prev' }, base = per.isMtd ? L('mês anterior inteiro', 'mes anterior completo') : L('mesmo número de dias', 'misma cantidad de días');
+  var opts = [['prev', L('Período anterior', 'Período anterior') + ' (' + base + ')'], ['yoy', L('Mesmo período do ano passado', 'Mismo período del año pasado')]]
+    .concat(dataMonths().map(function (m) { return ['m:' + m, MES_CMP[+m.slice(5, 7) - 1] + '/' + m.slice(0, 4)]; }))
+    .concat([['custom', L('Escolher datas…', 'Elegir fechas…')]]);
+  var sel = c.k === 'month' ? 'm:' + c.m : c.k;
+  $('#dzCmp').innerHTML = opts.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === sel ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('');
+  $('#dzCmpCustom').style.display = c.k === 'custom' ? '' : 'none';
+  if (c.k === 'custom') { $('#dzCFrom').value = c.from || ''; $('#dzCTo').value = c.to || ''; }
+  var semDado = !STATE.rows.some(function (r) { return r.date >= per.pFrom && r.date <= per.pTo && r.spend > 0; });
+  $('#dzPer').innerHTML = '<b style="color:var(--tx)">' + fmtD(per.from) + ' → ' + fmtD(per.to) + '</b> · ' + L('comparado com', 'comparado con') + ' ' + fmtD(per.pFrom, 1) + ' → ' + fmtD(per.pTo, 1) +
+    (per.cmp === 'prev' && per.isMtd ? ' (' + L('mês anterior inteiro', 'mes anterior completo') + ')' : '') +
+    (per.len !== per.pLen ? ' · <span style="color:var(--warn,#b45309)">' + per.len + ' × ' + per.pLen + ' ' + L('dias: totais não se comparam direto; olhe custos e taxas', 'días: los totales no se comparan directo; mirá costos y tasas') + '</span>' : '') +
+    (semDado ? ' · <span style="color:var(--warn,#b45309)">' + L('sem dados de mídia no período de comparação', 'sin datos de medios en el período de comparación') + '</span>' : '');
   $('#dzUpd').textContent = STATE.loadedAt ? L('Dados lidos em ', 'Datos leídos el ') + STATE.loadedAt.toLocaleString(LOC()) + (lastDataDate() ? ' · ' + L('último dia com dados: ', 'último día con datos: ') + fmtD(lastDataDate(), 1) : '') : '';
 }
 function renderAll() {
