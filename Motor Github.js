@@ -319,8 +319,8 @@ var RULES = {
   reach: { exact: ['alcance', 'reach'], re: [/^alcance/, /^reach/], not: [/custo|cost|costo|por /] },
   frequency: { exact: ['frequencia', 'frecuencia', 'frequency'], re: [/^frequen|^frecuen/] },
   lpv: { exact: ['visualizacoes da pagina de destino', 'visualizaciones de la pagina de destino', 'landing page views'], re: [/pagina de destino|landing page view/], not: [NOT_COST] },
-  conversations: { exact: ['conversas por mensagem iniciadas', 'conversas por mensagens iniciadas', 'conversas iniciadas por mensagem', 'conversas iniciadas por mensagens', 'conversas iniciadas', 'conversas', 'messaging conversations started', 'messaging conversation started', 'conversations started', 'conversaciones con mensajes iniciadas', 'conversaciones iniciadas'], re: [/\bconversas?\b|conversaciones|mensag|messaging conv/], not: [NOT_COST, /valor|value|compra|conversao|conversion/] },
-  leads: { exact: ['leads', 'lead', 'cadastros', 'leads de formulario', 'leads no formulario', 'form leads', 'clientes potenciales', 'registros'], re: [/^leads?\b/, /cadastro/, /clientes? potencial/], not: [NOT_COST, /qualific|conversa|mensag/] },
+  conversations: { exact: ['action messaging conversations started (onsite conversion)', 'action messaging conversations started', 'messaging conversations started (onsite conversion)', 'conversas por mensagem iniciadas', 'conversas por mensagens iniciadas', 'conversas iniciadas por mensagem', 'conversas iniciadas por mensagens', 'conversas iniciadas', 'conversas', 'messaging conversations started', 'messaging conversation started', 'conversations started', 'conversaciones con mensajes iniciadas', 'conversaciones iniciadas'], re: [/\bconversas?\b|conversaciones|mensag|messaging conv/], not: [NOT_COST, /valor|value|compra|conversao|conversion/] },
+  leads: { exact: ['action leads', 'leads', 'lead', 'cadastros', 'leads de formulario', 'leads no formulario', 'form leads', 'clientes potenciales', 'registros'], re: [/^leads?\b/, /cadastro/, /clientes? potencial/], not: [NOT_COST, /qualific|conversa|mensag/] },
   purchases: { exact: ['compras', 'purchases', 'conversoes', 'conversiones', 'conversions', 'conv.', 'action omni purchase', 'omni purchase', 'website purchases', 'compras no site'], re: [/^compras$/, /^purchases$/, /^conversoes$/, /^conversiones$/, /^conversions$/, /^conv\.?$/, /omni purchase$/], not: [NOT_COST, /valor|value|vista|view/] },
   revenue: { exact: ['valor conv', 'valor conv.', 'valor de conversao', 'valor de conversao da compra', 'valor de conversion de compras', 'conversion value', 'purchase conversion value', 'receita', 'action value omni purchase'], re: [/valor (de )?conv/, /conversion value/, /^receita$/, /value omni purchase/], not: [/carrinho|carrito|cart|finaliza|checkout|\/ ?cust|\/ ?cost|por cust|pagina|page/] },
   cart: { exact: ['adicoes ao carrinho', 'articulos agregados al carrito', 'adds to cart', 'agregar al carrito'], re: [/carrinho|carrito|add to cart|adds to cart/], not: [/valor|custo|costo|cost|por /] },
@@ -416,13 +416,52 @@ var SALE_TYPES = (function () {
 })();
 var SALE_IDS = Object.keys(SALE_TYPES);
 function isSale(f) { return f === 'vendas' || !!SALE_TYPES[f]; }
-var FUNNEL_ORDER = SALE_IDS.concat(['vendas', 'cadastro', 'whatsapp', 'trafego', 'outros']);
+var FUNNEL_ORDER = SALE_IDS.concat(['vendas'], Object.keys(D.tiposDeCadastro || {}), ['cadastro', 'whatsapp', 'trafego', 'outros']);
 function saleTypeByName(name) {
   var n = norm(name), hit = null;
   SALE_IDS.some(function (id) { if (SALE_TYPES[id].termos.some(function (t) { return n.indexOf(t) > -1; })) { hit = id; return true; } });
   return hit;
 }
 function matchAny(action, list) { var n = norm(action); return list.some(function (t) { return n.indexOf(t) > -1; }); }
+/* ============================== NOMES AMIGÁVEIS E TIPOS DE CADASTRO ============================== */
+/* Tipos de cadastro (opcional, DASH.tiposDeCadastro): separa campanhas de
+   cadastro pelo nome, sem perder a lista de contatos (CRM), por exemplo
+   { expansao: { nome: 'Expansão', termos: ['expans'], resultado: ['lead de expansão', 'leads de expansão'] } } */
+var LEAD_TYPES = (function () {
+  var t = D.tiposDeCadastro || {}, out = {};
+  Object.keys(t).forEach(function (id) { var x = t[id] || {}, r = x.resultado || []; if (typeof r === 'string') r = [r, r];
+    out[id] = { id: id, nome: x.nome || id, um: r[0] || 'cadastro', varios: r[1] || r[0] || 'cadastros', termos: (x.termos || []).map(norm).filter(Boolean), etapa: x.etapa || null }; });
+  return out;
+})();
+var LEAD_IDS = Object.keys(LEAD_TYPES);
+function isLead(f) { return f === 'cadastro' || !!LEAD_TYPES[f]; }
+function leadTypeByName(name) { var n = norm(name), hit = null; LEAD_IDS.some(function (id) { if (LEAD_TYPES[id].termos.some(function (t) { return n.indexOf(t) > -1; })) { hit = id; return true; } }); return hit; }
+/* Nome amigável da campanha (opcional, DASH.nomesCampanhas): regras pelo
+   nome técnico, com {unidade} e {tema} preenchidos sozinhos. A primeira regra
+   que bater vale. O nome técnico continua disponível (dica e Diagnóstico). */
+var NAME_UNITS = (D.unidades || []).map(function (u) { if (typeof u === 'string') u = { nome: u }; return { nome: u.nome, termos: (u.termos && u.termos.length ? u.termos : [u.nome]).map(norm) }; });
+var NAME_TECH = /^(fitmark|atom|eng|wpp|msg|whatsapp|wpp\b.*|cadastro|lp|vendas|site|california|abo|cbo|leads?|alc|rec\/alc|topo|trf - site|todas unid\.?|expansao|expansão|form|\d+)$/;
+function unitOfName(name) { var n = norm(name).replace(/\s+/g, ''), m = null; NAME_UNITS.some(function (u) { if (u.termos.some(function (t) { return t && n.indexOf(t.replace(/\s+/g, '')) > -1; })) { m = u.nome; return true; } }); return m; }
+function themeOfName(name) {
+  var s = String(name || '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/gu, ' ').replace(/—\s*c[oó]pia/i, '');
+  var toks = []; s.split(/[\[\]|]+/).forEach(function (p) { p = p.trim(); if (p) toks.push(p); });
+  var cand = toks.filter(function (t) { var k = norm(t); return !NAME_TECH.test(k) && !NAME_UNITS.some(function (u) { return u.termos.some(function (x) { return x && k.replace(/\s+/g, '') === x.replace(/\s+/g, ''); }); }); });
+  var t = cand.length ? cand[cand.length - 1] : '';
+  t = t.replace(/\s*-\s*(janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s*$/i, '').replace(/\bcalifornia\b/ig, '').replace(/\s+/g, ' ').trim();
+  if (t && t === t.toUpperCase()) t = t.toLowerCase().replace(/(^|\s)(\S)/g, function (m, a, b) { return a + b.toUpperCase(); }).replace(/\b(De|Da|Do|E)\b/g, function (w) { return w.toLowerCase(); });
+  return t;
+}
+function friendlyName(name) {
+  var rules = D.nomesCampanhas || [], n = norm(name), out = null;
+  rules.some(function (r) {
+    if (!(r.termos || []).some(function (t) { return n.indexOf(norm(t)) > -1; })) return false;
+    var u = unitOfName(name), th = themeOfName(name);
+    out = String(r.nome).replace('{unidade}', u || r.semUnidade || 'Todas as unidades');
+    out = th ? out.replace('{tema}', th) : out.replace(/\s*\(\{tema\}\)/, '').replace('{tema}', '');
+    return true;
+  });
+  return out;
+}
 function funnelFromText(t) {
   var n = norm(t);
   if (!n) return null;
@@ -435,8 +474,8 @@ function funnelFromText(t) {
 }
 /* Funis que fazem sentido para este cliente: lista em DASH.funis, ou automático pelas colunas existentes. */
 function allowedFunnels() {
-  if (D.funis && D.funis.length) { var l = D.funis.concat(['outros']); if (l.indexOf('vendas') > -1) l = l.concat(SALE_IDS); return l; }
-  var a = ['cadastro', 'whatsapp', 'outros'];
+  if (D.funis && D.funis.length) { var l = D.funis.concat(['outros']); if (l.indexOf('vendas') > -1) l = l.concat(SALE_IDS); if (l.indexOf('cadastro') > -1) l = l.concat(LEAD_IDS); return l; }
+  var a = ['cadastro', 'whatsapp', 'outros'].concat(LEAD_IDS);
   if (STATE.has.purchases || SALE_IDS.length) a = a.concat(['vendas'], SALE_IDS);
   if (STATE.has.lpv) a.push('trafego');
   return a;
@@ -455,6 +494,7 @@ function classifyCampaigns(rows) {
     Object.keys(overrides).some(function (sub) { if (norm(a.campaign).indexOf(norm(sub)) > -1) { f = overrides[sub]; why = 'regra da configuração'; return true; } });
     // 1b) tipo de venda pelo nome (ignora campanhas de alcance/engajamento)
     if (!f && SALE_IDS.length && funnelFromText(a.campaign) !== 'outros') { var tv = saleTypeByName(a.campaign); if (tv) { f = tv; why = 'tipo de venda pelo nome'; } }
+    if (!f && LEAD_IDS.length && funnelFromText(a.campaign) !== 'outros') { var tl = leadTypeByName(a.campaign); if (tl) { f = tl; why = 'tipo de cadastro pelo nome'; } }
     if (!f && a.forced) { f = a.forced; why = 'definido na fonte'; }
     if (!f) {
       var res = [['vendas', a.purchases], ['cadastro', a.leads], ['whatsapp', a.conversations]].filter(function (x) { return allow.indexOf(x[0]) > -1; }).sort(function (x, y) { return y[1] - x[1]; });
@@ -805,6 +845,7 @@ function daySeries(from, to, extra) {
 /* ============================== FUNIS ============================== */
 function FNAME(f) {
   if (SALE_TYPES[f]) return SALE_TYPES[f].nome;
+  if (LEAD_TYPES[f]) return LEAD_TYPES[f].nome;
   if (D.nomesFunis && D.nomesFunis[f]) return D.nomesFunis[f];
   return {
     vendas: L('Vendas no site', 'Ventas en el sitio'), cadastro: L('Cadastros', 'Registros'), whatsapp: 'WhatsApp',
@@ -813,10 +854,12 @@ function FNAME(f) {
 }
 function RESULT(f) {
   if (SALE_TYPES[f]) return 'purchases';
+  if (LEAD_TYPES[f]) return 'leads';
   return { vendas: 'purchases', cadastro: 'leads', whatsapp: 'conversations', trafego: 'lpv', outros: null }[f];
 }
 function RNAME(f, plural) {
   if (SALE_TYPES[f]) return plural === false ? SALE_TYPES[f].um : SALE_TYPES[f].varios;
+  if (LEAD_TYPES[f]) return plural === false ? LEAD_TYPES[f].um : LEAD_TYPES[f].varios;
   var n = { vendas: [L('compra', 'compra'), L('compras', 'compras')], cadastro: [L('cadastro', 'registro'), L('cadastros', 'registros')], whatsapp: [L('conversa', 'conversación'), L('conversas', 'conversaciones')], trafego: [L('visita', 'visita'), L('visitas', 'visitas')] }[f];
   return n ? n[plural === false ? 0 : 1] : L('resultados', 'resultados');
 }
@@ -845,7 +888,7 @@ function buildFunnel(f, per, camp) {
   var cc = crmIn(per.from, per.to, f).filter(casaUtm), cp = crmIn(per.pFrom, per.pTo, f).filter(casaUtm);
   var crmCur = { n: cc.length, qual: cc.filter(function (x) { return x.qual; }).length, sale: cc.filter(function (x) { return x.sale; }).length, value: cc.reduce(function (a, x) { return a + x.value; }, 0) };
   var crmPrev = { n: cp.length, qual: cp.filter(function (x) { return x.qual; }).length, sale: cp.filter(function (x) { return x.sale; }).length, value: cp.reduce(function (a, x) { return a + x.value; }, 0) };
-  var useLpv = STATE.has.lpv && cur.lpv + prev.lpv > 0 && (isSale(f) || f === 'trafego' || (f === 'cadastro' && cur.lpv > 0));
+  var useLpv = STATE.has.lpv && cur.lpv + prev.lpv > 0 && (isSale(f) || f === 'trafego' || (isLead(f) && cur.lpv > 0));
   var S = [];
   function st(key, label, c, p, from, bench, extra) { S.push(Object.assign({ key: key, label: label, cur: c, prev: p, from: from, bench: bench || null }, extra || {})); }
   st('impressions', L('Aparições do anúncio', 'Apariciones del anuncio'), cur.impressions, prev.impressions, null);
@@ -868,13 +911,13 @@ function buildFunnel(f, per, camp) {
     if (hasCart) st('cart', (typeof T.etapas.carrinho === 'string' ? T.etapas.carrinho : L('Colocaram no carrinho', 'Agregaron al carrito')), cur.cart, prev.cart, base, useLpv ? BENCH.cartRate : null, { rateKey: 'cart' });
     if (hasChk) st('checkout', (typeof T.etapas.pagamento === 'string' ? T.etapas.pagamento : L('Foram para o pagamento', 'Fueron al pago')), cur.checkout, prev.checkout, hasCart ? 'cart' : base, hasCart ? BENCH.chkRate : null, { rateKey: 'checkout' });
     st('purchases', T.acao || L('Compraram', 'Compraron'), cur.purchases, prev.purchases, hasChk ? 'checkout' : (hasCart ? 'cart' : base), hasChk ? BENCH.buyRate : null, { rateKey: 'purchases', final: true, sale: true });
-  } else if (f === 'cadastro') {
-    st('leads', L('Preencheram o formulário', 'Completaron el formulario'), cur.leads, prev.leads, base, null, { rateKey: 'leads', final: true });
+  } else if (isLead(f)) {
+    st('leads', (LEAD_TYPES[f] && LEAD_TYPES[f].etapa) || L('Preencheram o formulário', 'Completaron el formulario'), cur.leads, prev.leads, base, null, { rateKey: 'leads', final: true });
   } else if (f === 'whatsapp') {
     st('conversations', L('Chamaram no WhatsApp', 'Escribieron por WhatsApp'), cur.conversations, prev.conversations, base, null, { rateKey: 'conversations', final: true });
   }
   var resKey = RESULT(f);
-  if (f === 'cadastro' || f === 'whatsapp') {
+  if (isLead(f) || f === 'whatsapp') {
     if (crmSrc) st('crm', L('Chegaram ao comercial', 'Llegaron a ventas'), crmCur.n, crmPrev.n, resKey, null, { rateKey: 'crm' });
     else st('crm', L('Chegaram ao comercial', 'Llegaron a ventas'), null, null, resKey, null, { missing: 'crm' });
     if (crmStatus) {
@@ -909,7 +952,7 @@ function buildFunnel(f, per, camp) {
   });
   var level = 1;
   if (resKey && cur[resKey] + prev[resKey] > 0) level = 2;
-  if (crmSrc && (f === 'cadastro' || f === 'whatsapp')) level = 3;
+  if (crmSrc && (isLead(f) || f === 'whatsapp')) level = 3;
   if (isSale(f) && cur.purchases + prev.purchases > 0) level = 4;
   if (crmStatus && crmCur.sale + crmPrev.sale > 0) level = 4;
   var salesReal = isSale(f) ? cur.purchases : (crmStatus ? crmCur.sale : null);
@@ -991,7 +1034,7 @@ function insights(per) {
       if (dm > 0.25) out.push({ t: 'att', f: f, prio: 1, title: name + ': ' + L('CPM subiu ', 'el CPM subió ') + nf(dm * 100, 0) + '%', body: money(F.prev.cpm) + ' → ' + money(F.cur.cpm) + L(' por mil impressões.', ' por mil impresiones.'), act: L('Pode ser concorrência sazonal ou público saturado. Teste públicos mais amplos e reveja sobreposição entre conjuntos.', 'Puede ser competencia estacional o público saturado. Probá públicos más amplios y revisá superposición entre conjuntos.') });
     }
     // 6) dado que falta (didático)
-    if ((f === 'cadastro' || f === 'whatsapp') && F.level < 4 && F.cur[F.resKey] > 0) {
+    if ((isLead(f) || f === 'whatsapp') && F.level < 4 && F.cur[F.resKey] > 0) {
       out.push({ t: 'dado', f: f, prio: 2, title: name + ': ' + L('sem saber quais ', 'sin saber qué ') + RNAME(f) + L(' viraram venda', ' se convirtieron en venta'),
         body: count(F.cur[F.resKey]) + ' ' + RNAME(f) + L(' no período. Sem o registro do comercial, não é possível dizer se esta campanha dá lucro — só quanto custa cada contato.', ' en el período. Sin el registro de ventas, no se puede saber si esta campaña da ganancia — solo cuánto cuesta cada contacto.'),
         act: L('Uma planilha simples (data, nome, status) já libera custo por venda e retorno real. Veja a simulação no Simulador.', 'Una planilla simple (fecha, nombre, estado) ya habilita costo por venta y retorno real. Mirá la simulación en el Simulador.') });
@@ -1129,7 +1172,6 @@ function shell() {
     '<div class="head"><div><div class="brand"><div class="logo">' + esc(initial) + '</div><h1>' + esc(D.cliente || '') + ' · ' + L('Mídia paga', 'Medios pagos') + '</h1></div>' +
     '<small id="dzUpd"></small></div><div class="row">' +
     (LANGS.length > 1 ? '<div class="pills">' + LANGS.map(function (l) { return '<button class="pill' + (l === LANG ? ' on' : '') + '" data-lang="' + l + '">' + l.toUpperCase() + '</button>'; }).join('') + '</div>' : '') +
-    '<button class="btn" id="dzExport" title="' + esc(L('Baixa um arquivo de texto com os dados do período e filtros exibidos agora — pronto para colar em uma IA ou guardar.', 'Descarga un archivo de texto con los datos del período y los filtros que se ven ahora — listo para pegar en una IA o guardar.')) + '">⬇ ' + L('Exportar', 'Exportar') + '</button>' +
     '<button class="btn pri" id="dzReload">↻ ' + L('Atualizar', 'Actualizar') + '</button></div></div>' +
     '<div class="card"><div class="pills" id="dzPresets">' +
     [['7', L('7 dias', '7 días')], ['14', L('14 dias', '14 días')], ['30', L('30 dias', '30 días')], ['mtd', L('Este mês', 'Este mes')], ['lastmonth', L('Mês passado', 'Mes pasado')], ['custom', L('Escolher datas', 'Elegir fechas')]].map(function (p) { return '<button class="pill" data-p="' + p[0] + '">' + p[1] + '</button>'; }).join('') +
@@ -1144,7 +1186,6 @@ function shell() {
 }
 function bindShell() {
   $('#dzReload').onclick = function () { run(); };
-  $('#dzExport').onclick = function () { doExport(this); };
   $$('[data-lang]').forEach(function (b) { b.onclick = function () { LANG = b.dataset.lang; store.set('lang', LANG); shell(); renderAll(); }; });
   $$('#dzPresets .pill').forEach(function (b) { b.onclick = function () { STATE.preset = b.dataset.p; store.set('preset', STATE.preset); renderAll(); }; });
   $('#dzFrom').onchange = $('#dzTo').onchange = function () { STATE.from = $('#dzFrom').value; STATE.to = $('#dzTo').value; if (STATE.from && STATE.to) renderAll(); };
@@ -1244,6 +1285,7 @@ function enhanceTables() {
   if (!ROOT._ntbind) { ROOT._ntbind = 1; ROOT.addEventListener('click', function () { $$('.nt').forEach(function (x) { x.classList.remove('on'); }); }); }
 }
 /* Nomes longos quebram só nos separadores, nunca no meio da palavra */
+function campNameHTML(n) { var f = friendlyName(n); return f ? '<span title="' + esc(n) + '">' + esc(f) + '</span><small class="mut" style="display:block;font-size:11px;margin-top:2px">' + nameHTML(n) + '</small>' : nameHTML(n); }
 function nameHTML(n) { return esc(n).replace(/\]/g, ']<wbr>').replace(/\|/g, '|<wbr>').replace(/_/g, '_<wbr>'); }
 function pretty(s) {
   s = String(s == null ? '' : s).trim();
@@ -1381,7 +1423,7 @@ function renderOverview(per) {
       kpi(L('Custo por ', 'Costo por ') + RNAME(f, false), cpr, ppr, money, true, L('investimento ÷ ', 'inversión ÷ ') + RNAME(f)) +
       kpi(L('Investido', 'Invertido'), c.spend, p.spend, money, false, L('só nas campanhas deste objetivo', 'solo en campañas de este objetivo'));
     if (isSale(f) && STATE.has.revenue && (!SALE_TYPES[f] || SALE_TYPES[f].receita)) boxes += kpi(L('Vendido', 'Vendido'), c.revenue, p.revenue, money, false, HELP('revenue')) + kpi('ROAS', c.roas, p.roas, xf, false, HELP('roas'));
-    if ((f === 'cadastro' || f === 'whatsapp') && F.crmSrc) boxes += kpi(L('No comercial', 'En ventas'), F.crmCur.n, F.crmPrev.n, count, false, HELP('crm'));
+    if ((isLead(f) || f === 'whatsapp') && F.crmSrc) boxes += kpi(L('No comercial', 'En ventas'), F.crmCur.n, F.crmPrev.n, count, false, HELP('crm'));
     if (F.crmStatus) boxes += kpi(L('Vendas', 'Ventas'), F.crmCur.sale, F.crmPrev.sale, count, false, L('registradas pelo comercial', 'registradas por ventas'));
     boxes += '</div></div>';
   });
@@ -1470,7 +1512,7 @@ function renderFunnels(per) {
     html += '<div class="card"><h3>' + L('Campanha', 'Campaña') + '</h3>' +
       '<p class="mut" style="font-size:12.5px">' + L('Só aparecem campanhas que investiram no período selecionado. Escolher uma recalcula o funil inteiro só com ela.', 'Solo aparecen campañas que invirtieron en el período seleccionado. Elegir una recalcula el embudo entero solo con ella.') + '</p>' +
       '<select class="fsel" data-fc style="margin-top:10px"><option value="all"' + (camp ? '' : ' selected') + '>' + L('Todas as campanhas', 'Todas las campañas') + ' (' + opcoes.length + ')</option>' +
-      opcoes.map(function (c) { return '<option value="' + esc(c.key) + '"' + (camp === c.key ? ' selected' : '') + '>' + esc(c.name) + ' · ' + moneyShort(c.spend) + '</option>'; }).join('') +
+      opcoes.map(function (c) { return '<option value="' + esc(c.key) + '"' + (camp === c.key ? ' selected' : '') + ' title="' + esc(c.name) + '">' + esc(friendlyName(c.name) || c.name) + ' · ' + moneyShort(c.spend) + '</option>'; }).join('') +
       '</select></div>';
   }
 
@@ -1490,7 +1532,7 @@ function renderFunnels(per) {
       '<div class="sec" style="margin-top:14px">' + L('O que conseguimos medir', 'Lo que podemos medir') + '</div><div class="ladder">' + ladder(F).map(function (x) { return '<div class="step' + (x[1] ? ' done' : '') + '">' + (x[1] ? '✓ ' : '') + x[0] + '</div>'; }).join('') + '</div></div>';
   });
 
-  if (!camp) html += whyAlertHTML(fs.filter(function (f) { return (f === 'cadastro' || f === 'whatsapp') && buildFunnel(f, per).level < 4; }), per);
+  if (!camp) html += whyAlertHTML(fs.filter(function (f) { return (isLead(f) || f === 'whatsapp') && buildFunnel(f, per).level < 4; }), per);
   v.innerHTML = html;
   $$('select[data-fc]', v).forEach(function (b) { b.onchange = function () { STATE.funCamp = b.value === 'all' ? null : b.value; renderFunnels(per); enhanceTables(); reportHeight(); }; });
   bindWhy(v);
@@ -1639,7 +1681,7 @@ function bindGoal(v, per) {
 }
 
 /* ============================== SIMULADOR ============================== */
-function simFunnels() { return funnelsPresent().filter(function (f) { return isSale(f) || f === 'cadastro' || f === 'whatsapp'; }); }
+function simFunnels() { return funnelsPresent().filter(function (f) { return isSale(f) || isLead(f) || f === 'whatsapp'; }); }
 function simDefaults(per) {
   var fs = simFunnels(), f0 = fs[0] || 'vendas', F = fs.length ? buildFunnel(f0, per) : null;
   var last30 = agg(filtered(addDays(per.to, -29), per.to));
@@ -1658,9 +1700,9 @@ function renderSim(per) {
   var saleRate, saleReal = false;
   if (isSale(f)) { saleRate = 1; saleReal = true; }
   else if (F.crmStatus && F.cur[F.resKey] > 0 && F.crmCur.sale > 0) { saleRate = F.crmCur.sale / F.cur[F.resKey]; saleReal = true; }
-  else saleRate = (f === 'cadastro' ? sim.hipCad : sim.hipWa) / 100;
+  else saleRate = (isLead(f) ? sim.hipCad : sim.hipWa) / 100;
   var tkReal = isSale(f) && F.cur.purchases > 0 && F.cur.revenue > 0 ? F.cur.revenue / F.cur.purchases : null;
-  var rn = RNAME(f), rn1 = RNAME(f, false), hipKey = f === 'cadastro' ? 'hipCad' : 'hipWa';
+  var rn = RNAME(f), rn1 = RNAME(f, false), hipKey = isLead(f) ? 'hipCad' : 'hipWa';
   if (sim.metaTipo === 'fat' && sim.ticket > 0) sim.meta = Math.max(1, Math.round((sim.metaFat || 0) / sim.ticket));
   else if (sim.metaTipo !== 'fat' && sim.ticket > 0) sim.metaFat = Math.round(sim.meta * sim.ticket);
   var scen = { P: SR.P, R: SR.R, O: SR.O }[sim.cen] || SR.R, X = project(scen, sim, saleRate, tax);
@@ -1813,7 +1855,7 @@ function renderCamp(per) {
   html += '<div class="only-narrow"><div class="row" style="margin-bottom:6px"><span class="mut" style="font-size:12.5px">' + L('Ordenar por', 'Ordenar por') + '</span><select id="dzSortN"><option value="spendNow">' + L('Investimento', 'Inversión') + '</option><option value="resNow">' + L('Resultados', 'Resultados') + '</option><option value="cprNow">' + L('Custo por resultado', 'Costo por resultado') + '</option><option value="name">' + L('Nome', 'Nombre') + '</option></select></div>' +
     (rows.length ? rows.map(function (r, idx) {
       var rk = RESULT(r.f);
-      return '<div class="ccard' + (idx >= 5 ? ' more' : '') + '">' + tags(r) + '<div class="cn">' + nameHTML(r.name) + '</div><div class="cg">' +
+      return '<div class="ccard' + (idx >= 5 ? ' more' : '') + '">' + tags(r) + '<div class="cn">' + campNameHTML(r.name) + '</div><div class="cg">' +
         '<div><span>' + L('Investido', 'Invertido') + '</span><b>' + money(r.spendNow) + '</b><span>' + L('antes ', 'antes ') + money(r.spendPrev) + '</span></div>' +
         '<div><span>' + (rk ? cap(RNAME(r.f)) : L('Resultado', 'Resultado')) + '</span><b>' + (rk ? count(r.resNow) : '—') + '</b><span>' + (rk ? L('antes ', 'antes ') + count(r.resPrev) : '') + '</span></div>' +
         '<div><span>' + L('Custo cada', 'Costo c/u') + '</span><b>' + money(r.cprNow) + '</b><span>' + L('antes ', 'antes ') + money(r.cprPrev) + '</span></div></div></div>';
@@ -1840,7 +1882,7 @@ function renderCamp(per) {
     '</tr></thead><tbody>' +
     (rows.length ? rows.map(function (r, idx) {
       var rk = RESULT(r.f);
-      return '<tr' + (idx >= 5 ? ' class="more"' : '') + '><td>' + tags(r) + '<div>' + nameHTML(r.name) + '</div></td>' +
+      return '<tr' + (idx >= 5 ? ' class="more"' : '') + '><td>' + tags(r) + '<div>' + campNameHTML(r.name) + '</div></td>' +
         '<td class="now gstart"><b>' + money(r.spendNow) + '</b>' + dl(r.spendNow, r.spendPrev, false).replace(/ (up|down)"/, ' mut"') + '</td>' +
         '<td class="now">' + (rk ? '<b>' + count(r.resNow) + '</b> <small class="mut">' + RNAME(r.f, Math.round(r.resNow) !== 1) + '</small>' + dl(r.resNow, r.resPrev, false) : '—') + '</td>' +
         '<td class="now"><b>' + money(r.cprNow) + '</b>' + dl(r.cprNow, r.cprPrev, true) + '</td>' +
@@ -2242,114 +2284,6 @@ function renderDiag() {
   v.innerHTML = html;
   $$('[data-save]', v).forEach(function (b) { b.onclick = function () { store.set('paste_' + b.dataset.save, $('[data-paste="' + b.dataset.save + '"]', v).value); run(); }; });
   $$('[data-clear]', v).forEach(function (b) { b.onclick = function () { store.del('paste_' + b.dataset.clear); run(); }; });
-}
-
-/* ============================== EXPORTAR (dados do período exibido) ============================== */
-/* Gera um .md com exatamente o que está sendo mostrado — período, filtros, totais, funis,
-   campanhas, CRM e redes sociais — para colar em uma IA ou guardar fora do dashboard.
-   Nada aqui é recalculado em outra lógica: usa as mesmas funções (agg, filtered, buildFunnel,
-   socAgg...) que já alimentam as abas, então o export nunca diverge do que a tela mostra. */
-function exportText(per) {
-  var L1 = 'antes', L2 = 'antes';
-  var lines = [];
-  lines.push('# ' + (D.cliente || '') + ' — ' + L('Exportação do dashboard de mídia paga', 'Exportación del dashboard de medios pagos'));
-  lines.push(L('Gerado em', 'Generado el') + ': ' + new Date().toLocaleString(LOC()));
-  lines.push(L('Período atual', 'Período actual') + ': ' + per.from + ' a ' + per.to);
-  lines.push(L('Período anterior (comparação)', 'Período anterior (comparación)') + ': ' + per.pFrom + ' a ' + per.pTo);
-  if (STATE.plat !== 'all') lines.push(L('Plataforma filtrada', 'Plataforma filtrada') + ': ' + STATE.plat);
-  if (STATE.acct !== 'all') lines.push(L('Conta filtrada', 'Cuenta filtrada') + ': ' + STATE.acct);
-  lines.push('');
-
-  var cur = agg(filtered(per.from, per.to)), prev = agg(filtered(per.pFrom, per.pTo));
-  function row(label, c, p, fmt) {
-    fmt = fmt || count;
-    var d = deltaTxt(c, p);
-    lines.push('- ' + label + ': ' + fmt(c) + (p != null ? ' (' + L(L1, L2) + ': ' + fmt(p) + (d ? ', ' + d.txt : '') + ')' : ''));
-  }
-  lines.push('## ' + L('Totais de mídia paga', 'Totales de medios pagos'));
-  row(L('Investimento', 'Inversión'), cur.spend, prev.spend, money);
-  row(L('Impressões', 'Impresiones'), cur.impressions, prev.impressions);
-  row(L('Cliques', 'Clics'), cur.clicks, prev.clicks);
-  if (cur.impressions) row('CTR', cur.clicks / cur.impressions, prev.impressions ? prev.clicks / prev.impressions : null, pctf);
-  if (cur.clicks) row('CPC', cur.spend / cur.clicks, prev.clicks ? prev.spend / prev.clicks : null, money);
-  if (cur.impressions) row('CPM', cur.spend / cur.impressions * 1000, prev.impressions ? prev.spend / prev.impressions * 1000 : null, money);
-  lines.push('');
-
-  lines.push('## ' + L('Funis', 'Embudos'));
-  funnelsPresent().forEach(function (f) {
-    if (f === 'outros') return;
-    var F = buildFunnel(f, per), rk = F.resKey, c = F.cur[rk], p = F.prev[rk];
-    lines.push('### ' + FNAME(f));
-    lines.push('- ' + L('Investido', 'Invertido') + ': ' + money(F.cur.spend) + (F.prev.spend ? ' (' + L(L1, L2) + ': ' + money(F.prev.spend) + ')' : ''));
-    lines.push('- ' + RNAME(f) + ': ' + count(c) + (p != null ? ' (' + L(L1, L2) + ': ' + count(p) + ')' : ''));
-    if (c) lines.push('- ' + L('Custo por', 'Costo por') + ' ' + RNAME(f, false) + ': ' + money(F.cur.spend / c));
-    if (isSale(f) && STATE.has.revenue) lines.push('- ' + L('Receita', 'Ingresos') + ': ' + money(F.cur.revenue) + ' · ROAS ' + xf(F.cur.roas));
-    lines.push('');
-  });
-
-  var campRows = filtered(per.from, per.to), byC = {};
-  campRows.forEach(function (r) {
-    var o = byC[r.key] || (byC[r.key] = { campaign: r.campaign, platform: r.platform, account: r.account, spend: 0, impressions: 0, clicks: 0, leads: 0, purchases: 0, conversations: 0 });
-    ['spend', 'impressions', 'clicks', 'leads', 'purchases', 'conversations'].forEach(function (f) { o[f] += r[f] || 0; });
-  });
-  var cList = Object.keys(byC).map(function (k) { return byC[k]; }).sort(function (a, b) { return b.spend - a.spend; });
-  if (cList.length) {
-    lines.push('## ' + L('Campanhas no período', 'Campañas en el período'));
-    lines.push([L('Campanha', 'Campaña'), L('Plataforma', 'Plataforma'), L('Investimento', 'Inversión'), L('Impressões', 'Impresiones'), L('Cliques', 'Clics'), 'Leads', L('Compras', 'Compras'), L('Conversas', 'Conversaciones')].join(' | '));
-    lines.push('---|---|---|---|---|---|---|---');
-    cList.forEach(function (o) {
-      lines.push([o.campaign, o.platform, money(o.spend), count(o.impressions), count(o.clicks), count(o.leads), count(o.purchases), count(o.conversations)].join(' | '));
-    });
-    lines.push('');
-  }
-
-  if (STATE.crm.length) {
-    var crmNow = crmIn(per.from, per.to), crmPrev = crmIn(per.pFrom, per.pTo);
-    var qual = crmNow.filter(function (c) { return c.qual; }).length, sale = crmNow.filter(function (c) { return c.sale; }).length;
-    lines.push('## CRM');
-    lines.push('- ' + L('Contatos no período', 'Contactos en el período') + ': ' + crmNow.length + (crmPrev.length ? ' (' + L(L1, L2) + ': ' + crmPrev.length + ')' : ''));
-    lines.push('- ' + L('Qualificados', 'Calificados') + ': ' + qual + ' · ' + L('Vendas', 'Ventas') + ': ' + sale);
-    lines.push('');
-  }
-
-  if (hasSocial()) {
-    lines.push('## ' + L('Redes sociais (orgânico)', 'Redes sociales (orgánico)'));
-    Object.keys(STATE.socRedes).forEach(function (rede) {
-      var rows = socIn(per.from, per.to, function (r) { return r.rede === rede; });
-      if (!rows.length) return;
-      var a = socAgg(rows), gain = followersGain(rede, per.from, per.to);
-      lines.push('### ' + rede);
-      lines.push('- ' + L('Visualizações', 'Visualizaciones') + ': ' + count(a.views) + ' · ' + L('Interações', 'Interacciones') + ': ' + count(a.interactions));
-      if (gain != null) lines.push('- ' + L('Novos seguidores', 'Nuevos seguidores') + ': ' + count(gain));
-      lines.push('');
-    });
-  }
-
-  lines.push('## ' + L('Diagnóstico das fontes', 'Diagnóstico de las fuentes'));
-  STATE.sources.forEach(function (s) {
-    var st = s.status || {};
-    lines.push('- ' + (s.nome || s.conta || s.plataforma || s.tipo) + ': ' + (st.ok ? (count(st.rows) + L(' linhas', ' filas') + (st.dup ? ' · ' + st.dup + L(' duplicadas ignoradas', ' duplicadas ignoradas') : '')) : (L('erro: ', 'error: ') + (st.error || ''))));
-  });
-  lines.push('');
-  lines.push('---');
-  lines.push(L('Exportado do dashboard de mídia paga', 'Exportado del dashboard de medios pagos') + ' (' + (D.cliente || '') + ') · motor v' + VERSION + ' · ' + (typeof window !== 'undefined' && window.location ? window.location.href : ''));
-  return lines.join('\n');
-}
-function doExport(btn) {
-  try {
-    var per = resolvePeriod();
-    var text = exportText(per);
-    var blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = CLIENT_KEY + '_' + per.from + '_a_' + per.to + '.md';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
-    if (btn) { var t = btn.textContent; btn.textContent = '✓ ' + L('Exportado', 'Exportado'); setTimeout(function () { btn.textContent = t; }, 1800); }
-  } catch (e) {
-    if (window.console) console.error(e);
-    alert(L('Não deu para exportar: ', 'No se pudo exportar: ') + e.message);
-  }
 }
 
 /* ============================== ORQUESTRAÇÃO ============================== */
