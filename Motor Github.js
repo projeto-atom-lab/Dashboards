@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.16.0';
+var VERSION = '1.17.0';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -1159,6 +1159,11 @@ var TABS = [
   ['wa', function () { return L('Resumo WhatsApp', 'Resumen WhatsApp'); }],
   ['diag', function () { return L('Diagnóstico', 'Diagnóstico'); }]
 ];
+/* Frentes (opcional, DASH.frentes): uma aba para cada grupo de campanhas,
+   por exemplo [{ id: 'mensagens', nome: 'Mensagens', funis: ['whatsapp'] }].
+   Cada aba mostra só os números, o funil e as campanhas daquela frente. */
+var FRENTES = (D.frentes || []).filter(function (x) { return x && x.id && x.funis && x.funis.length; });
+FRENTES.slice().reverse().forEach(function (fr) { TABS.splice(1, 0, ['fr_' + fr.id, function () { return fr.nome; }]); });
 var CUR_TAB = 'overview';
 /* Cliente de geração de leads: Cadastros vem antes de Campanhas */
 function orderedTabs() {
@@ -1387,10 +1392,19 @@ function chartMetrics() {
   if (STATE.has.revenue && fv) list.push({ k: 'roas', n: 'ROAS', get: function (s) { return s.roas; }, fmt: xf, f: fv, ratio: function (s) { return s.roas; } });
   return list;
 }
-function renderChart(host, per) {
-  var ms = chartMetrics(), m = ms.filter(function (x) { return x.k === STATE.chartMetric; })[0] || ms[0];
-  STATE.chartMetric = m.k;
-  var ext = m.f ? function (r) { return r.funnel === m.f; } : null;
+function renderChart(host, per, only) {
+  var ms = chartMetrics(), mk = only ? 'chartMetric_' + only.join('_') : 'chartMetric';
+  if (only) {
+    var inF = function (r) { return only.indexOf(r.funnel) > -1; };
+    ms = [{ k: 'spend', n: L('Investimento', 'Inversión'), get: function (s) { return s.spend; }, fmt: money, add: true, ff: inF },
+          { k: 'clicks', n: L('Cliques', 'Clics'), get: function (s) { return s.clicks; }, fmt: count, add: true, ff: inF },
+          { k: 'ctr', n: 'CTR', get: function (s) { return s.ctr; }, fmt: function (v) { return pctf(v); }, ratio: function (s) { return s.ctr; }, ff: inF },
+          { k: 'cpm', n: 'CPM', get: function (s) { return s.cpm; }, fmt: money, ratio: function (s) { return s.cpm; }, ff: inF }]
+      .concat(ms.filter(function (x) { return x.f && only.indexOf(x.f) > -1; }));
+  }
+  var m = ms.filter(function (x) { return x.k === STATE[mk]; })[0] || ms[0];
+  STATE[mk] = m.k;
+  var ext = m.ff || (m.f ? function (r) { return r.funnel === m.f; } : null);
   var a = daySeries(per.from, per.to, ext), b = daySeries(per.pFrom, per.pTo, ext);
   var labels = a.map(function (x) { return fmtD(x.date); }), now = a.map(function (x) { return m.get(x.s); });
   var prev = a.map(function (_, i) { return b[i] ? m.get(b[i].s) : null; }), prevLabels = a.map(function (_, i) { return b[i] ? fmtD(b[i].date) : ''; });
@@ -1408,7 +1422,7 @@ function renderChart(host, per) {
   }
   var oldPills = host.querySelector('.hs'), keepScroll = oldPills ? oldPills.scrollLeft : 0;
   host.innerHTML = '<div class="hsw"><div class="tw-hint">' + L('arraste para ver mais →', 'deslizá para ver más →') + '</div><div class="pills scrollx hs" style="margin-bottom:10px">' + ms.map(function (x) { return '<button class="pill' + (x.k === m.k ? ' on' : '') + '" data-m="' + x.k + '">' + x.n + '</button>'; }).join('') + '</div></div>' + legendHTML(per, !!proj) + '<div class="chart"></div>';
-  $$('[data-m]', host).forEach(function (b) { b.onclick = function () { STATE.chartMetric = b.dataset.m; renderChart(host, per); }; });
+  $$('[data-m]', host).forEach(function (b) { b.onclick = function () { STATE[mk] = b.dataset.m; renderChart(host, per, only); }; });
   var np = host.querySelector('.hs'); if (np) np.scrollLeft = keepScroll;
   enhanceTables();
   drawChart($('.chart', host), { labels: labels, prevLabels: prevLabels, now: now, prev: prev, proj: proj, fmt: m.fmt, fmtAxis: m.fmt === money ? moneyShort : m.fmt,
@@ -1433,8 +1447,13 @@ function heroSentence(per, fs) {
   if (cmp) s += ' ' + L('Em relação ao período comparado, o custo por ', 'Respecto al período comparado, el costo por ') + RNAME(cmp.f, false) + ' ' + (cmp.d.v < 0 ? L('caiu ', 'bajó ') : L('subiu ', 'subió ')) + '<b>' + nf(Math.abs(cmp.d.v) * 100, 0) + '%</b>' + (cmp.d.v < 0 ? ' ✓' : '') + '.';
   return s;
 }
+/* DASH.visaoGeral (opcional): quais funis aparecem na visão geral, nessa ordem */
+function overviewFunnels() {
+  var fs = funnelsPresent(); if (!D.visaoGeral || !D.visaoGeral.length) return fs;
+  return D.visaoGeral.filter(function (f) { return fs.indexOf(f) > -1; });
+}
 function renderOverview(per) {
-  var v = $('#v-overview'), cur = agg(filtered(per.from, per.to)), prev = agg(filtered(per.pFrom, per.pTo)), fs = funnelsPresent();
+  var v = $('#v-overview'), cur = agg(filtered(per.from, per.to)), prev = agg(filtered(per.pFrom, per.pTo)), fs = overviewFunnels();
   var html = '<div class="card hl"><div class="hero-t">' + L('Resumo do período', 'Resumen del período') + '</div><p class="hero" style="margin:0">' + heroSentence(per, fs) + '</p></div>';
   var boxes = '';
   fs.forEach(function (f) {
@@ -1461,6 +1480,44 @@ function renderOverview(per) {
   v.innerHTML = html;
   if ($('#dzGoFun')) $('#dzGoFun').onclick = function () { goTab('funnels'); };
   renderChart($('#dzChart'), per);
+}
+
+/* ============================== FRENTES ============================== */
+function renderFrente(fr, per) {
+  var v = $('#v-fr_' + fr.id); if (!v) return;
+  var fs = fr.funis.filter(function (f) { return FUNNEL_ORDER.indexOf(f) > -1 || f === 'outros'; });
+  var inF = function (r) { return fs.indexOf(r.funnel) > -1; };
+  var cur = agg(filtered(per.from, per.to, inF)), prev = agg(filtered(per.pFrom, per.pTo, inF));
+  var html = '';
+  if (!cur.spend && !prev.spend) { v.innerHTML = '<div class="card empty">' + L('Nenhuma campanha desta frente investiu no período escolhido nem no período comparado.', 'Ninguna campaña de este frente invirtió en el período elegido ni en el comparado.') + '</div>'; return; }
+  var boxes = '';
+  fs.forEach(function (f) {
+    var F = buildFunnel(f, per), rk = F.resKey; if (!rk) return;
+    var c = F.cur, p = F.prev, cpr = c[rk] > 0 ? c.spend / c[rk] : null, ppr = p[rk] > 0 ? p.spend / p[rk] : null;
+    boxes += '<div class="box"><h3>' + FNAME(f) + '</h3><div class="grid">' +
+      kpi(cap(RNAME(f)), c[rk], p[rk], count, false, HELP(rk)) +
+      kpi(L('Custo por ', 'Costo por ') + RNAME(f, false), cpr, ppr, money, true, L('investimento ÷ ', 'inversión ÷ ') + RNAME(f)) +
+      kpi(L('Investido', 'Invertido'), c.spend, p.spend, money, false, L('só nas campanhas desta frente', 'solo en campañas de este frente'));
+    if (isSale(f) && STATE.has.revenue && (!SALE_TYPES[f] || SALE_TYPES[f].receita)) boxes += kpi(L('Vendido', 'Vendido'), c.revenue, p.revenue, money, false, HELP('revenue')) + kpi('ROAS', c.roas, p.roas, xf, false, HELP('roas'));
+    if ((isLead(f) || f === 'whatsapp') && F.crmSrc) boxes += kpi(L('No comercial', 'En ventas'), F.crmCur.n, F.crmPrev.n, count, false, HELP('crm'));
+    if (F.crmStatus) boxes += kpi(L('Qualificados', 'Calificados'), F.crmCur.qual, F.crmPrev.qual, count, false, '') + kpi(L('Vendas', 'Ventas'), F.crmCur.sale, F.crmPrev.sale, count, false, L('registradas pelo comercial', 'registradas por ventas'));
+    boxes += '</div></div>';
+  });
+  html += '<div class="cols">' + boxes + '<div class="box"><h3>' + L('Mídia desta frente', 'Medios de este frente') + '</h3><div class="grid">' +
+    kpi(L('Aparições', 'Apariciones'), cur.impressions, prev.impressions, count, false, HELP('impressions')) +
+    kpi(L('Cliques', 'Clics'), cur.clicks, prev.clicks, count, false, HELP('clicks')) + kpi('CTR', cur.ctr, prev.ctr, pctf, false, HELP('ctr')) +
+    kpi(L('Custo por clique', 'Costo por clic'), cur.cpc, prev.cpc, money, true, HELP('cpc')) + kpi('CPM', cur.cpm, prev.cpm, money, true, HELP('cpm')) + '</div></div></div>';
+  html += '<div class="box" style="margin-top:14px"><h3>' + L('Dia a dia', 'Día a día') + '</h3><div id="dzChart_' + fr.id + '"></div></div>';
+  fs.forEach(function (f) { var F = buildFunnel(f, per); if (F.cur.spend + F.prev.spend > 0) html += '<div class="card hl"><h2>' + FNAME(f) + '</h2>' + visualFunnel(F) + '</div>'; });
+  // campanhas da frente
+  var m = {}, pm = {};
+  filtered(per.from, per.to, inF).forEach(function (r) { var x = m[r.key] || (m[r.key] = { name: r.campaign, f: r.funnel, spend: 0, res: 0, impr: 0, clicks: 0 }); var rk = RESULT(r.funnel); x.spend += r.spend; x.res += rk ? r[rk] : 0; x.impr += r.impressions; x.clicks += r.clicks; });
+  filtered(per.pFrom, per.pTo, inF).forEach(function (r) { var x = pm[r.key] || (pm[r.key] = { spend: 0, res: 0 }); var rk = RESULT(r.funnel); x.spend += r.spend; x.res += rk ? r[rk] : 0; });
+  var rows = Object.keys(m).map(function (k) { var x = m[k], p = pm[k]; x.cpr = x.res > 0 ? x.spend / x.res : null; x.pcpr = p && p.res > 0 ? p.spend / p.res : null; x.isNew = !p; return x; }).filter(function (x) { return x.spend > 0; }).sort(function (a, b) { return b.spend - a.spend; });
+  if (rows.length) html += '<div class="card"><h2>' + L('Campanhas desta frente', 'Campañas de este frente') + '</h2>' + tableWrap('<table><thead><tr><th>' + L('Campanha', 'Campaña') + '</th><th>' + L('Investido', 'Invertido') + '</th><th>' + L('Aparições', 'Apariciones') + '</th><th>' + L('Cliques', 'Clics') + '</th><th>' + L('Resultado', 'Resultado') + '</th><th>' + L('Custo por resultado', 'Costo por resultado') + '</th><th>' + L('Antes', 'Antes') + '</th></tr></thead><tbody>' +
+    rows.map(function (x) { var d = deltaTxt(x.cpr, x.pcpr); return '<tr><td>' + campNameHTML(x.name) + (x.isNew ? ' <span class="tag">' + L('nova', 'nueva') + '</span>' : '') + '</td><td>' + money(x.spend) + '</td><td>' + count(x.impr) + '</td><td>' + count(x.clicks) + '</td><td>' + count(x.res) + ' <small class="mut">' + RNAME(x.f, Math.round(x.res) !== 1) + '</small></td><td><b>' + money(x.cpr) + '</b>' + (d ? ' <span class="d ' + (d.v <= 0 ? 'up' : 'down') + '">' + d.txt + '</span>' : '') + '</td><td>' + money(x.pcpr) + '</td></tr>'; }).join('') + '</tbody></table>') + '</div>';
+  v.innerHTML = html;
+  renderChart($('#dzChart_' + fr.id), per, fs);
 }
 
 /* ============================== FUNIL ============================== */
@@ -2340,6 +2397,7 @@ function syncBar(per) {
 function renderAll() {
   var per = resolvePeriod();
   syncBar(per);
+  FRENTES.forEach(function (fr) { try { renderFrente(fr, per); } catch (e) { var el = $('#v-fr_' + fr.id); if (el) el.innerHTML = '<div class="card down">' + esc(e.message) + '</div>'; if (window.console) console.error(e); } });
   [['overview', function () { renderOverview(per); }], ['funnels', function () { renderFunnels(per); }], ['sim', function () { renderSim(per); }], ['camp', function () { renderCamp(per); }], ['crm', function () { renderCRM(per); }], ['pace', renderPace], ['social', function () { renderSocial(per); }], ['wa', function () { renderWa(per); }], ['diag', renderDiag]].forEach(function (x) {
     try { x[1](); } catch (e) { var el = $('#v-' + x[0]); if (el) el.innerHTML = '<div class="card down">' + L('Erro ao montar esta aba: ', 'Error al armar esta pestaña: ') + esc(e.message) + '</div>'; if (window.console) console.error(e); }
   });
