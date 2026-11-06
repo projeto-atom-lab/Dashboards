@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.17.0';
+var VERSION = '1.18.1';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -430,10 +430,13 @@ function matchAny(action, list) { var n = norm(action); return list.some(functio
 var LEAD_TYPES = (function () {
   var t = D.tiposDeCadastro || {}, out = {};
   Object.keys(t).forEach(function (id) { var x = t[id] || {}, r = x.resultado || []; if (typeof r === 'string') r = [r, r];
-    out[id] = { id: id, nome: x.nome || id, um: r[0] || 'cadastro', varios: r[1] || r[0] || 'cadastros', termos: (x.termos || []).map(norm).filter(Boolean), etapa: x.etapa || null }; });
+    out[id] = { id: id, nome: x.nome || id, um: r[0] || 'cadastro', varios: r[1] || r[0] || 'cadastros', termos: (x.termos || []).map(norm).filter(Boolean), etapa: x.etapa || null, rotulo: x.rotulo || null, ajuda: x.ajuda || null }; });
   return out;
 })();
 var LEAD_IDS = Object.keys(LEAD_TYPES);
+/* Rótulo e explicação do card de resultado; um tipo de cadastro pode trocar (rotulo, ajuda) */
+function resLabel(f) { return (LEAD_TYPES[f] && LEAD_TYPES[f].rotulo) || cap(RNAME(f)); }
+function resHelp(f, rk) { return (LEAD_TYPES[f] && LEAD_TYPES[f].ajuda) || HELP(rk); }
 function isLead(f) { return f === 'cadastro' || !!LEAD_TYPES[f]; }
 function leadTypeByName(name) { var n = norm(name), hit = null; LEAD_IDS.some(function (id) { if (LEAD_TYPES[id].termos.some(function (t) { return n.indexOf(t) > -1; })) { hit = id; return true; } }); return hit; }
 /* Nome amigável da campanha (opcional, DASH.nomesCampanhas): regras pelo
@@ -724,6 +727,40 @@ function followersGain(rede, from, to) {
 }
 function hasSocial() { return STATE.social.length > 0; }
 
+/* ============================== CRM: CONTATOS ÚNICOS ============================== */
+/* A mesma pessoa pode aparecer mais de uma vez: repetida na lista (uma linha
+   por mudança de status) ou nas duas listas (cadastros e qualificados). Aqui
+   cada contato vira uma linha só por funil, identificado por ID, e-mail ou
+   telefone. Fica a data mais antiga e a etapa mais avançada. Linhas sem
+   nenhum identificador são mantidas como estão. */
+function crmKey(raw) {
+  var id = '', mail = '', tel = '';
+  Object.keys(raw || {}).forEach(function (h) {
+    var n = norm(h), v = String(raw[h] == null ? '' : raw[h]).trim();
+    if (!v || valorVazio(v)) return;
+    if (!mail && /e-?mail/.test(n) && /@/.test(v)) mail = v.toLowerCase();
+    else if (!tel && /telefone|phone|celular|whats|fone|numero/.test(n)) { var dg = v.replace(/\D/g, ''); if (dg.length >= 8) tel = dg.slice(-9); }
+    else if (!id && /^(id|id do contato|id do lead|lead id|contact id|id contato|leadgen id)$/.test(n)) id = v.replace(/^l:/i, '');
+  });
+  return id ? 'i:' + id : mail ? 'm:' + mail : tel ? 't:' + tel : null;
+}
+function dedupeCRM(list) {
+  var keep = [], byKey = {}, dup = 0;
+  list.slice().sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; }).forEach(function (c) {
+    var k = crmKey(c.raw);
+    if (!k) { keep.push(c); return; }
+    k = c.funnel + '|' + k;
+    var a = byKey[k];
+    if (!a) { byKey[k] = c; keep.push(c); return; }
+    dup++;
+    a.qual = a.qual || c.qual; a.sale = a.sale || c.sale; a.value = Math.max(a.value || 0, c.value || 0);
+    if (!a.utm && c.utm) a.utm = c.utm;
+    if (c.status) a.status = c.status;
+  });
+  STATE.crmDup = dup;
+  return keep;
+}
+
 /* ============================== CARREGAMENTO ============================== */
 function initSources() {
   STATE.sources = (D.fontes || []).map(function (f, i) {
@@ -749,6 +786,7 @@ function loadAll() {
       src.status.ok = !src.status.error;
     }).catch(function (e) { src.status.ok = false; src.status.error = L('Não foi possível ler a planilha publicada: ', 'No se pudo leer la planilla publicada: ') + e.message; });
   })).then(function () {
+    STATE.crm = dedupeCRM(STATE.crm);
     STATE.camp = classifyCampaigns(STATE.rows);
     STATE.rows.forEach(function (r) { r.funnel = STATE.camp[r.key].funnel; });
     applySaleTypes();
@@ -1461,7 +1499,7 @@ function renderOverview(per) {
     var F = buildFunnel(f, per), rk = F.resKey, c = F.cur, p = F.prev;
     var cpr = c[rk] > 0 ? c.spend / c[rk] : null, ppr = p[rk] > 0 ? p.spend / p[rk] : null;
     boxes += '<div class="box"><h3>' + FNAME(f) + '</h3><div class="grid">' +
-      kpi(cap(RNAME(f)), c[rk], p[rk], count, false, HELP(rk)) +
+      kpi(resLabel(f), c[rk], p[rk], count, false, resHelp(f, rk)) +
       kpi(L('Custo por ', 'Costo por ') + RNAME(f, false), cpr, ppr, money, true, L('investimento ÷ ', 'inversión ÷ ') + RNAME(f)) +
       kpi(L('Investido', 'Invertido'), c.spend, p.spend, money, false, L('só nas campanhas deste objetivo', 'solo en campañas de este objetivo'));
     if (isSale(f) && STATE.has.revenue && (!SALE_TYPES[f] || SALE_TYPES[f].receita)) boxes += kpi(L('Vendido', 'Vendido'), c.revenue, p.revenue, money, false, HELP('revenue')) + kpi('ROAS', c.roas, p.roas, xf, false, HELP('roas'));
@@ -1495,7 +1533,7 @@ function renderFrente(fr, per) {
     var F = buildFunnel(f, per), rk = F.resKey; if (!rk) return;
     var c = F.cur, p = F.prev, cpr = c[rk] > 0 ? c.spend / c[rk] : null, ppr = p[rk] > 0 ? p.spend / p[rk] : null;
     boxes += '<div class="box"><h3>' + FNAME(f) + '</h3><div class="grid">' +
-      kpi(cap(RNAME(f)), c[rk], p[rk], count, false, HELP(rk)) +
+      kpi(resLabel(f), c[rk], p[rk], count, false, resHelp(f, rk)) +
       kpi(L('Custo por ', 'Costo por ') + RNAME(f, false), cpr, ppr, money, true, L('investimento ÷ ', 'inversión ÷ ') + RNAME(f)) +
       kpi(L('Investido', 'Invertido'), c.spend, p.spend, money, false, L('só nas campanhas desta frente', 'solo en campañas de este frente'));
     if (isSale(f) && STATE.has.revenue && (!SALE_TYPES[f] || SALE_TYPES[f].receita)) boxes += kpi(L('Vendido', 'Vendido'), c.revenue, p.revenue, money, false, HELP('revenue')) + kpi('ROAS', c.roas, p.roas, xf, false, HELP('roas'));
@@ -2151,6 +2189,7 @@ function renderCRM(per) {
     if (charts) html += '<div class="sec">' + L('O que as pessoas responderam', 'Lo que respondieron') + '</div><div class="grid g2">' + charts + '</div>';
   }
   if (!hasStatus) html = whyAlertHTML(['cadastro'], per) + html;
+  if (STATE.crmDup) html += '<p class="mut" style="font-size:12.5px;margin-top:10px">ⓘ ' + nf(STATE.crmDup) + L(' registros repetidos do mesmo contato (mesmo ID, e-mail ou telefone) foram unidos: cada pessoa conta uma vez, com a etapa mais avançada.', ' registros repetidos del mismo contacto (mismo ID, e-mail o teléfono) se unieron: cada persona cuenta una vez, con la etapa más avanzada.') + '</p>';
   v.innerHTML = html;
   $$('select[data-utm]', v).forEach(function (b) { b.onchange = function () { STATE.crmUtm = b.value === 'all' ? null : b.value; renderCRM(per); enhanceTables(); reportHeight(); }; });
   bindWhy(v);
