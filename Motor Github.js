@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.19.0';
+var VERSION = '1.19.1';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -375,7 +375,7 @@ function detectLocale(values) {
   var comma = 0, dot = 0;
   values.forEach(function (v) {
     var s = String(v).replace(/[^\d,.\-]/g, '');
-    if (!s || !/\d/.test(s)) return;
+    if (!s || !/[1-9]/.test(s)) return;   // "0" e "0,00" não dizem nada sobre o formato
     if (/^-?\d{1,3}(\.\d{3})+,\d+$/.test(s)) { comma += 4; return; }   // 1.234.567,89
     if (/^-?\d{1,3}(,\d{3})+\.\d+$/.test(s)) { dot += 4; return; }     // 1,234,567.89
     if (/^-?\d+,\d{4,}$/.test(s)) { comma += 4; return; }               // 123,456789
@@ -392,7 +392,16 @@ function makeNum(locale) {
     if (v == null) return 0;
     var s = String(v).trim(); if (!s || s === '-' || s === '--') return 0;
     s = s.replace(/[^\d,.\-]/g, '');
-    if (locale === 'comma') s = s.replace(/\./g, '').replace(',', '.'); else s = s.replace(/,/g, '');
+    /* Valor sem dúvida é lido pelo próprio formato (7.81, 7,81, 1.234,56,
+       1,234.56); só o ambíguo (1.234) usa o formato que predomina na coluna. */
+    var hc = s.indexOf(',') > -1, hd = s.indexOf('.') > -1;
+    if (hc && hd) s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+    else if (hc || hd) {
+      var sep = hc ? ',' : '.', parts = s.split(sep), tail = parts[parts.length - 1];
+      if (parts.length > 2) s = parts.join('');
+      else if (tail.length !== 3) s = parts.join('.');
+      else s = ((sep === ',') === (locale === 'comma')) ? parts.join('.') : parts.join('');
+    }
     var n = parseFloat(s); return isFinite(n) ? n : 0;
   };
 }
@@ -532,7 +541,7 @@ function processMedia(src, text) {
   var miss = ['date', 'campaign', 'spend'].filter(function (f) { return map[f] == null; });
   if (miss.length) { st.error = L('Colunas essenciais não encontradas: ', 'Columnas esenciales no encontradas: ') + miss.join(', '); return []; }
   var body = rows.slice(h + 1), sample = [];
-  NUM_FIELDS.forEach(function (f) { if (map[f] != null) body.slice(0, 300).forEach(function (r) { if (r[map[f]]) sample.push(r[map[f]]); }); });
+  NUM_FIELDS.forEach(function (f) { if (map[f] != null) { var k = 0; body.forEach(function (r) { var v = r[map[f]]; if (k < 400 && v && /[1-9]/.test(v)) { sample.push(v); k++; } }); } });
   st.locale = src.decimal || detectLocale(sample);
   var num = makeNum(st.locale), out = [], seen = {}, dup = 0, skipped = 0;
   var platform = src.plataforma || 'meta', have = {}, ctrIdx = header.map(norm).indexOf('ctr');
@@ -647,7 +656,7 @@ function processGConv(src, text) {
   var h = findHeaderRow(rows), header = rows[h], map = mapColumns(header, ['date', 'campaign', 'convAction', 'purchases', 'revenue']);
   st.headers = header; st.map = map; st.headerRow = h;
   if (map.date == null || map.convAction == null) { st.error = L('Faltam colunas de data ou ação de conversão.', 'Faltan columnas de fecha o acción de conversión.'); return []; }
-  var body = rows.slice(h + 1), num = makeNum(detectLocale(body.slice(0, 300).map(function (r) { return r[map.purchases]; })));
+  var body = rows.slice(h + 1), num = makeNum(detectLocale(body.map(function (r) { return r[map.purchases]; }).filter(function (v) { return v && /[1-9]/.test(v); }).slice(0, 400)));
   var out = [], seen = {}, dup = 0;
   body.forEach(function (r) {
     var d = parseDate(r[map.date]); if (!d) return;
@@ -671,7 +680,7 @@ function processSocial(src, text) {
   if (map.date == null) { st.error = L('Não encontrei a coluna de data.', 'No encontré la columna de fecha.'); return []; }
 
   var body = rows.slice(h + 1), sample = [];
-  SOC_FIELDS.forEach(function (f) { if (map[f] != null) body.slice(0, 300).forEach(function (r) { if (r[map[f]]) sample.push(r[map[f]]); }); });
+  SOC_FIELDS.forEach(function (f) { if (map[f] != null) { var k = 0; body.forEach(function (r) { var v = r[map[f]]; if (k < 400 && v && /[1-9]/.test(v)) { sample.push(v); k++; } }); } });
   var loc = src.decimal === 'comma' || src.decimal === 'dot' ? src.decimal : detectLocale(sample);
   st.locale = loc;
   var num = makeNum(loc);
