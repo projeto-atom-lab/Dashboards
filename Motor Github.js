@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.20.0';
+var VERSION = '1.21.0';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -628,6 +628,7 @@ function processCRM(src, text) {
   var forcaQual = src.etapa === 'qualificado' || src.etapa === 'qual';
   var forcaVenda = src.etapa === 'venda' || src.etapa === 'vendido';
   var utmIdx = src.colunaCampanha ? normed.indexOf(norm(src.colunaCampanha)) : normed.findIndex(function (x) { return /utm[_ ]?campaign|utm[_ ]?campanha|^campanha$|^campaign$|origem da campanha/.test(x); });
+  var qtdIdx = src.colunaQuantidade ? normed.indexOf(norm(src.colunaQuantidade)) : -1;
   var valueIdx = src.colunaValor ? normed.indexOf(norm(src.colunaValor)) : normed.findIndex(function (x) { return /valor da venda|valor venda|receita|ticket|valor fechado/.test(x); });
   st.headers = header; st.map = { date: map.date, status: statusIdx > -1 ? statusIdx : undefined, value: valueIdx > -1 ? valueIdx : undefined }; st.headerRow = h;
   if (map.date == null) { st.error = L('Nenhuma coluna de data encontrada.', 'No se encontró columna de fecha.'); return []; }
@@ -643,7 +644,12 @@ function processCRM(src, text) {
     var sale = forcaVenda || (statusIdx > -1 && SALE_RE.test(s));
     var qual = sale || forcaQual || (statusIdx > -1 && (QUAL_RE.test(s) || qualList.some(function (t) { return t && s.indexOf(t) > -1; })));
     var raw = {}; header.forEach(function (hh, j) { raw[hh] = r[j] == null ? '' : r[j]; });
-    out.push({ date: d, funnel: src.funil || 'cadastro', sale: sale, qual: qual, value: (sale && valueIdx > -1) ? num(r[valueIdx]) : 0, status: statusIdx > -1 ? String(r[statusIdx]).trim() : '', utm: (utmIdx > -1 && !valorVazio(r[utmIdx])) ? String(r[utmIdx]).trim() : '', etapa: src.etapa || '', raw: raw, src: src.nome || '' });
+    /* colunaQuantidade (opcional): a linha vale por N registros (ex.: resumo
+       do mês com 14 vendas). Vira N registros, com o valor dividido entre eles. */
+    var qtd = qtdIdx > -1 ? Math.round(num(r[qtdIdx])) : 1, val = (sale && valueIdx > -1) ? num(r[valueIdx]) : 0;
+    if (qtdIdx > -1 && qtd < 1) { if (val > 0) qtd = 1; else return; }
+    for (var qi = 0; qi < qtd; qi++)
+      out.push({ date: d, funnel: src.funil || 'cadastro', sale: sale, qual: qual, value: val / qtd, status: statusIdx > -1 ? String(r[statusIdx]).trim() : '', utm: (utmIdx > -1 && !valorVazio(r[utmIdx])) ? String(r[utmIdx]).trim() : '', etapa: src.etapa || '', raw: raw, src: src.nome || '' });
   });
   st.rows = out.length; st.hasStatus = statusIdx > -1 || forcaQual || forcaVenda;
   st.map.campanha = utmIdx > -1 ? utmIdx : undefined;
@@ -816,8 +822,18 @@ function applySaleTypes() {
   var gc = {};
   STATE.gconv.forEach(function (c) { var k = c.date + '|' + norm(c.campaign); (gc[k] = gc[k] || []).push(c); });
   var done = {};
+  var GLEAD = (D.acoesGoogleContato || []).map(norm).filter(Boolean), gdone = {};
   STATE.rows.forEach(function (r) {
-    var T = SALE_TYPES[r.funnel]; if (!T) return;
+    var T = SALE_TYPES[r.funnel];
+    /* Contatos do Google: só as ações de conversão listadas (formulário,
+       ligação, WhatsApp). Visita à loja e rota no mapa não são contato. */
+    if (!T && GLEAD.length && r.platform === 'google' && STATE.gconv.length && RESULT(r.funnel)) {
+      var gk = r.date + '|' + norm(r.campaign), gl = gdone[gk] ? [] : (gc[gk] || []); gdone[gk] = 1;
+      var tot = gl.filter(function (c) { return matchAny(c.action, GLEAD); }).reduce(function (a, c) { return a + c.conv; }, 0);
+      var rk = RESULT(r.funnel); if (rk === 'leads' || rk === 'conversations') { r.leads = 0; r.conversations = 0; r[rk] = tot; }
+      return;
+    }
+    if (!T) return;
     if (!T.receita) r.revenue = 0;
     /* Tipo cujo pixel registra o resultado como Lead (ex: assinatura com
        cadastro): o lead vira o resultado do funil, sem contar em dobro. */
@@ -1211,7 +1227,7 @@ var TABS = [
   ['overview', function () { return L('Visão geral', 'Resumen'); }],
   ['funnels', function () { return L('Funil', 'Embudo'); }],
   ['camp', function () { return L('Campanhas', 'Campañas'); }],
-  ['crm', function () { return L('Cadastros', 'Registros'); }],
+  ['crm', function () { return D.nomeAbaCrm || L('Cadastros', 'Registros'); }],
   ['social', function () { return L('Redes sociais', 'Redes sociales'); }],
   ['pace', function () { return L('Ritmo de verba', 'Ritmo de inversión'); }],
   ['sim', function () { return L('Simulador', 'Simulador'); }],
@@ -1544,6 +1560,18 @@ function renderOverview(per) {
     kpi(L('Investido', 'Invertido'), cur.spend, prev.spend, money, false, HELP('spend')) + kpi(L('Aparições', 'Apariciones'), cur.impressions, prev.impressions, count, false, HELP('impressions')) +
     kpi(L('Cliques', 'Clics'), cur.clicks, prev.clicks, count, false, HELP('clicks')) + kpi('CTR', cur.ctr, prev.ctr, pctf, false, HELP('ctr')) +
     kpi(L('Custo por clique', 'Costo por clic'), cur.cpc, prev.cpc, money, true, HELP('cpc')) + kpi('CPM', cur.cpm, prev.cpm, money, true, HELP('cpm')) + '</div></div>';
+  /* Retorno: vendas com valor registradas pelo comercial (qualquer funil),
+     comparadas com todo o investimento do período. Só aparece se existir. */
+  if (STATE.crm.some(function (c) { return c.sale && c.value > 0; })) {
+    var vs = function (a, b) { var o = { n: 0, v: 0 }; STATE.crm.forEach(function (c) { if (c.sale && c.date >= a && c.date <= b) { o.n++; o.v += c.value || 0; } }); return o; };
+    var vc = vs(per.from, per.to), vp = vs(per.pFrom, per.pTo);
+    html += '<div class="box"><h3>' + L('Retorno sobre o investimento', 'Retorno sobre la inversión') + '</h3><div class="grid">' +
+      kpi(L('Vendas registradas', 'Ventas registradas'), vc.n, vp.n, count, false, L('vendas da planilha do comercial, de qualquer origem', 'ventas de la planilla comercial, de cualquier origen')) +
+      kpi(L('Faturamento', 'Facturación'), vc.v, vp.v, money, false, L('soma do valor das vendas registradas', 'suma del valor de las ventas registradas')) +
+      kpi(L('Retorno (ROAS)', 'Retorno (ROAS)'), cur.spend > 0 ? vc.v / cur.spend : null, prev.spend > 0 ? vp.v / prev.spend : null, xf, false, L('faturamento ÷ investimento em mídia no mesmo período', 'facturación ÷ inversión en medios en el mismo período')) +
+      kpi(L('Investimento por venda', 'Inversión por venta'), vc.n ? cur.spend / vc.n : null, vp.n ? prev.spend / vp.n : null, money, true, L('investimento ÷ vendas registradas', 'inversión ÷ ventas registradas')) +
+      kpi(L('Ticket médio', 'Ticket promedio'), vc.n ? vc.v / vc.n : null, vp.n ? vp.v / vp.n : null, money, false, '') + '</div></div>';
+  }
   var ins = insights(per).slice(0, 3);
   if (ins.length) html += '<div class="box"><h3>' + L('Destaques', 'Destacados') + '</h3>' + ins.map(insightShort).join('') + '<button class="btn" id="dzGoFun" style="margin-top:6px">' + L('Ver funil completo →', 'Ver embudo completo →') + '</button></div>';
   v.innerHTML = html;
@@ -2134,11 +2162,13 @@ function donutHTML(entries, answered) {
 function campoPermitido(k) {
   var n = norm(k);
   var brancas = D.perguntas, negras = D.perguntasOcultas;
+  /* palavra inteira: "Idade" não pode casar com "Quantidade" */
+  var casa = function (q) { var nq = norm(q); if (!nq) return false; if (n === nq) return true; var i = n.indexOf(nq); while (i > -1) { var a = n.charAt(i - 1), b = n.charAt(i + nq.length); if (!/[a-z0-9]/.test(a) && !/[a-z0-9]/.test(b)) return true; i = n.indexOf(nq, i + 1); } return false; };
   if (Array.isArray(brancas)) {
     if (!brancas.length) return false;
-    return brancas.some(function (q) { var nq = norm(q); return nq && (n === nq || n.indexOf(nq) > -1); });
+    return brancas.some(casa);
   }
-  if (Array.isArray(negras) && negras.some(function (q) { var nq = norm(q); return nq && (n === nq || n.indexOf(nq) > -1); })) return false;
+  if (Array.isArray(negras) && negras.some(casa)) return false;
   return isQuestionField(k);
 }
 function notaResp(answered, total) {
@@ -2147,6 +2177,8 @@ function notaResp(answered, total) {
 }
 function renderCRM(per) {
   var v = $('#v-crm'); if (!v) return;
+  /* DASH.textosCrm (opcional): rótulos da aba quando a lista não é de cadastros (ex.: vendas) */
+  var CT = D.textosCrm || {};
   // campanhas presentes na coluna de UTM, para permitir olhar só uma delas
   var camps = {}, temUtm = false;
   STATE.crm.forEach(function (c) { if (c.utm) { temUtm = true; camps[c.utm] = (camps[c.utm] || 0) + 1; } });
@@ -2172,8 +2204,8 @@ function renderCRM(per) {
 
   var filtro = '';
   if (temUtm && lista.length > 1) {
-    filtro = '<div class="card"><h3>' + L('Campanha de origem', 'Campaña de origen') + '</h3>' +
-      '<p class="mut" style="font-size:12.5px">' + L('Vem da UTM registrada no cadastro. Escolha uma campanha para ver o perfil só dos contatos que ela trouxe.', 'Viene de la UTM registrada en el registro. Elegí una campaña para ver el perfil solo de los contactos que trajo.') + '</p>' +
+    filtro = '<div class="card"><h3>' + (CT.origem || L('Campanha de origem', 'Campaña de origen')) + '</h3>' +
+      '<p class="mut" style="font-size:12.5px">' + (CT.origemAjuda ? CT.origemAjuda + ' ' : '') + (CT.origemAjuda ? '' : L('Vem da UTM registrada no cadastro.', 'Viene de la UTM registrada en el registro.') + ' ') + L('Escolha uma opção para ver o perfil só desse grupo.', 'Elegí una opción para ver el perfil solo de ese grupo.') + '</p>' +
       cobUtm() +
       '<select class="fsel" data-utm style="margin-top:10px"><option value="all"' + (sel === 'all' ? ' selected' : '') + '>' + L('Todas as campanhas', 'Todas las campañas') + '</option>' +
       lista.map(function (u) { return '<option value="' + esc(u) + '"' + (sel === u ? ' selected' : '') + '>' + esc(pretty(u)) + ' (' + camps[u] + ')</option>'; }).join('') +
@@ -2183,11 +2215,12 @@ function renderCRM(per) {
   }
 
   var html = filtro + legendHTML(per) +
-    '<div class="grid">' + kpi(L('Cadastros recebidos', 'Registros recibidos'), now.length, prev.length, count, false, L('na lista do comercial', 'en la lista de ventas')) +
-    kpiSimple(L('Ritmo', 'Ritmo'), perDayTxt(now.length / per.len, L('cadastro', 'registro'), L('cadastros', 'registros')), '', L('antes: ', 'antes: ') + perDayTxt(prev.length / per.pLen, L('cadastro', 'registro'), L('cadastros', 'registros')));
-  if (hasStatus) html += kpi(L('Com perfil', 'Con perfil'), now.filter(function (c) { return c.qual; }).length, prev.filter(function (c) { return c.qual; }).length, count) + kpi(L('Viraram venda', 'Se convirtieron en venta'), now.filter(function (c) { return c.sale; }).length, prev.filter(function (c) { return c.sale; }).length, count);
+    '<div class="grid">' + kpi(CT.recebidos || L('Cadastros recebidos', 'Registros recibidos'), now.length, prev.length, count, false, CT.recebidosAjuda || L('na lista do comercial', 'en la lista de ventas')) +
+    kpiSimple(L('Ritmo', 'Ritmo'), perDayTxt(now.length / per.len, CT.um || L('cadastro', 'registro'), CT.varios || L('cadastros', 'registros')), '', L('antes: ', 'antes: ') + perDayTxt(prev.length / per.pLen, CT.um || L('cadastro', 'registro'), CT.varios || L('cadastros', 'registros')));
+  if (CT.faturamento) { var fv = function (l) { return l.reduce(function (a, c) { return a + (c.value || 0); }, 0); }; html += kpi(CT.faturamento, fv(now), fv(prev), money, false, '') + kpi(L('Ticket médio', 'Ticket promedio'), now.length ? fv(now) / now.length : null, prev.length ? fv(prev) / prev.length : null, money, false, ''); }
+  if (hasStatus && !CT.semEtapas) html += kpi(L('Com perfil', 'Con perfil'), now.filter(function (c) { return c.qual; }).length, prev.filter(function (c) { return c.qual; }).length, count) + kpi(L('Viraram venda', 'Se convirtieron en venta'), now.filter(function (c) { return c.sale; }).length, prev.filter(function (c) { return c.sale; }).length, count);
   html += '</div>';
-  if (!now.length) html += '<div class="card empty" style="margin-top:12px">' + L('Nenhum cadastro no período selecionado.', 'Ningún registro en el período.') + '</div>';
+  if (!now.length) html += '<div class="card empty" style="margin-top:12px">' + (CT.vazio || L('Nenhum cadastro no período selecionado.', 'Ningún registro en el período.')) + '</div>';
   else {
     var fields = {}, order = [];
     now.forEach(function (c) { Object.keys(c.raw || {}).forEach(function (k) { if (!fields[k]) { fields[k] = []; order.push(k); } fields[k].push(c.raw[k]); }); });
