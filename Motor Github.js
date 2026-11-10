@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.18.1';
+var VERSION = '1.19.0';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -313,9 +313,9 @@ var RULES = {
   objective: { exact: ['objetivo', 'objective', 'objetivo da campanha', 'objetivo de la campana'], re: [/^objetivo/, /objective/] },
   adset: { exact: ['nome do conjunto de anuncios', 'conjunto de anuncios', 'nombre del conjunto de anuncios', 'ad set name', 'grupo de anuncios'], re: [/conjunto de anuncio|ad set name|grupo de anuncio/], not: [/\bid\b/] },
   ad: { exact: ['nome do anuncio', 'anuncio', 'nombre del anuncio', 'ad name'], re: [/nome do anuncio|nombre del anuncio|^ad name$/], not: [/\bid\b/] },
-  spend: { exact: ['valor gasto', 'valor gasto (brl)', 'valor gasto (ars)', 'valor usado', 'valor usado (brl)', 'importe gastado', 'importe gastado (ars)', 'amount spent', 'custo', 'cost', 'investimento', 'inversion'], re: [/^valor (gasto|usado)/, /^importe gastado/, /^custo$/, /^cost$/, /amount spent/, /^investimento$/], not: [/por |\/|cpc|cpm|conv|lead|resultado/] },
+  spend: { exact: ['ad analytics cost', 'valor gasto', 'valor gasto (brl)', 'valor gasto (ars)', 'valor usado', 'valor usado (brl)', 'importe gastado', 'importe gastado (ars)', 'amount spent', 'custo', 'cost', 'investimento', 'inversion'], re: [/^valor (gasto|usado)/, /^importe gastado/, /^custo$/, /^cost$/, /amount spent/, /^investimento$/], not: [/por |\/|cpc|cpm|conv|lead|resultado/] },
   impressions: { exact: ['impr', 'impr.', 'impressoes', 'impresiones', 'impressions'], re: [/^impr/, /impression/], not: [/%|ctr|custo|cost|cpm|taxa|parcela|share/] },
-  clicks: { exact: ['cliques no link', 'clics en el enlace', 'link clicks', 'cliques', 'clics', 'clicks'], re: [/cliques no link|clics en el enlace|link clicks/, /^cliques/, /^clics/, /^clicks/], not: [/unicos|unique|ctr|custo|costo|cost|cpc|taxa|saida|outbound/] },
+  clicks: { exact: ['ad analytics clicks', 'ad analytics action clicks', 'cliques no link', 'clics en el enlace', 'link clicks', 'cliques', 'clics', 'clicks'], re: [/cliques no link|clics en el enlace|link clicks/, /^cliques/, /^clics/, /^clicks/], not: [/unicos|unique|ctr|custo|costo|cost|cpc|taxa|saida|outbound/] },
   reach: { exact: ['alcance', 'reach'], re: [/^alcance/, /^reach/], not: [/custo|cost|costo|por /] },
   frequency: { exact: ['frequencia', 'frecuencia', 'frequency'], re: [/^frequen|^frecuen/] },
   lpv: { exact: ['visualizacoes da pagina de destino', 'visualizaciones de la pagina de destino', 'landing page views'], re: [/pagina de destino|landing page view/], not: [NOT_COST] },
@@ -415,6 +415,8 @@ var SALE_TYPES = (function () {
   return out;
 })();
 var SALE_IDS = Object.keys(SALE_TYPES);
+/* Nome de cada plataforma para a tela */
+function PNAME(p) { return { meta: 'Meta', google: 'Google', linkedin: 'LinkedIn', tiktok: 'TikTok' }[p] || (p ? p.charAt(0).toUpperCase() + p.slice(1) : ''); }
 function isSale(f) { return f === 'vendas' || !!SALE_TYPES[f]; }
 var FUNNEL_ORDER = SALE_IDS.concat(['vendas'], Object.keys(D.tiposDeCadastro || {}), ['cadastro', 'whatsapp', 'trafego', 'outros']);
 function saleTypeByName(name) {
@@ -533,7 +535,8 @@ function processMedia(src, text) {
   NUM_FIELDS.forEach(function (f) { if (map[f] != null) body.slice(0, 300).forEach(function (r) { if (r[map[f]]) sample.push(r[map[f]]); }); });
   st.locale = src.decimal || detectLocale(sample);
   var num = makeNum(st.locale), out = [], seen = {}, dup = 0, skipped = 0;
-  var platform = src.plataforma || 'meta', have = {};
+  var platform = src.plataforma || 'meta', have = {}, ctrIdx = header.map(norm).indexOf('ctr');
+  if (src.cliquesPelaCtr && ctrIdx > -1) STATE.has.clicks = true;
   NUM_FIELDS.forEach(function (f) { have[f] = map[f] != null; });
   if (src.conversaoComo === 'cadastro') { have.leads = have.leads || have.purchases; have.purchases = false; have.revenue = false; }
   body.forEach(function (r) {
@@ -541,7 +544,7 @@ function processMedia(src, text) {
     if (!date) { skipped++; return; }
     var o = {
       date: date, platform: platform,
-      account: (map.account != null && r[map.account]) ? String(r[map.account]).trim() : (src.conta || (platform === 'google' ? 'Google Ads' : 'Meta Ads')),
+      account: (map.account != null && r[map.account]) ? String(r[map.account]).trim() : (src.conta || PNAME(platform) + ' Ads'),
       campaign: String(r[map.campaign] || '(sem nome)').trim(),
       objective: map.objective != null ? String(r[map.objective] || '') : '',
       adset: map.adset != null ? String(r[map.adset] || '') : '',
@@ -549,6 +552,7 @@ function processMedia(src, text) {
       forcedFunnel: src.funil || null, _h: have
     };
     NUM_FIELDS.forEach(function (f) { o[f] = map[f] != null ? num(r[map[f]]) : 0; });
+    if (src.cliquesPelaCtr && !o.clicks && ctrIdx > -1) { var ct = num(r[ctrIdx]); if (ct > 1) ct = ct / 100; o.clicks = Math.round(ct * o.impressions); }
     if (src.conversaoComo === 'cadastro') { o.leads += o.purchases; o.purchases = 0; o.revenue = 0; }
     o.key = o.platform + '||' + o.account + '||' + o.campaign;
     var dk = [date, o.key, o.adset, o.ad].join('|'), sig = NUM_FIELDS.map(function (f) { return Math.round(o[f] * 100); }).join(',');
@@ -621,12 +625,14 @@ function processCRM(src, text) {
   var sampleC = [];
   rows.slice(h + 1, h + 200).forEach(function (r) { r.forEach(function (cell) { if (cell) sampleC.push(cell); }); });
   var num = makeNum(src.decimal === 'comma' || src.decimal === 'dot' ? src.decimal : detectLocale(sampleC));
+  /* status que contam como qualificado nesta fonte (opcional): statusQualificado: ['em contato'] */
+  var qualList = (src.statusQualificado || []).map(norm);
   var out = [];
   rows.slice(h + 1).forEach(function (r) {
     var d = parseDate(r[map.date]); if (!d) return;
     var s = statusIdx > -1 ? norm(r[statusIdx]) : '';
     var sale = forcaVenda || (statusIdx > -1 && SALE_RE.test(s));
-    var qual = sale || forcaQual || (statusIdx > -1 && QUAL_RE.test(s));
+    var qual = sale || forcaQual || (statusIdx > -1 && (QUAL_RE.test(s) || qualList.some(function (t) { return t && s.indexOf(t) > -1; })));
     var raw = {}; header.forEach(function (hh, j) { raw[hh] = r[j] == null ? '' : r[j]; });
     out.push({ date: d, funnel: src.funil || 'cadastro', sale: sale, qual: qual, value: (sale && valueIdx > -1) ? num(r[valueIdx]) : 0, status: statusIdx > -1 ? String(r[statusIdx]).trim() : '', utm: (utmIdx > -1 && !valorVazio(r[utmIdx])) ? String(r[utmIdx]).trim() : '', etapa: src.etapa || '', raw: raw, src: src.nome || '' });
   });
@@ -733,29 +739,28 @@ function hasSocial() { return STATE.social.length > 0; }
    cada contato vira uma linha só por funil, identificado por ID, e-mail ou
    telefone. Fica a data mais antiga e a etapa mais avançada. Linhas sem
    nenhum identificador são mantidas como estão. */
-function crmKey(raw) {
-  var id = '', mail = '', tel = '';
+function crmKeys(raw) {
+  var ks = [];
   Object.keys(raw || {}).forEach(function (h) {
     var n = norm(h), v = String(raw[h] == null ? '' : raw[h]).trim();
     if (!v || valorVazio(v)) return;
-    if (!mail && /e-?mail/.test(n) && /@/.test(v)) mail = v.toLowerCase();
-    else if (!tel && /telefone|phone|celular|whats|fone|numero/.test(n)) { var dg = v.replace(/\D/g, ''); if (dg.length >= 8) tel = dg.slice(-9); }
-    else if (!id && /^(id|id do contato|id do lead|lead id|contact id|id contato|leadgen id)$/.test(n)) id = v.replace(/^l:/i, '');
+    if (/e-?mail/.test(n) && /@/.test(v)) ks.push('m:' + v.toLowerCase());
+    else if (/telefone|phone|celular|whats|fone|numero/.test(n)) { var dg = v.replace(/\D/g, ''); if (dg.length >= 10) ks.push('t:' + dg.slice(-9)); }
+    else if (/^(id|id do contato|id do lead|id do lead \(meta\)|lead id|contact id|id contato|leadgen id)$/.test(n)) { var id = v.replace(/^l:/i, '').replace(/\.0$/, ''); if (/^\d{6,}$/.test(id)) ks.push('i:' + id); }
   });
-  return id ? 'i:' + id : mail ? 'm:' + mail : tel ? 't:' + tel : null;
+  return ks;
 }
 function dedupeCRM(list) {
-  var keep = [], byKey = {}, dup = 0;
+  var keep = [], owner = {}, dup = 0;
   list.slice().sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; }).forEach(function (c) {
-    var k = crmKey(c.raw);
-    if (!k) { keep.push(c); return; }
-    k = c.funnel + '|' + k;
-    var a = byKey[k];
-    if (!a) { byKey[k] = c; keep.push(c); return; }
+    var ks = crmKeys(c.raw).map(function (k) { return c.funnel + '|' + k; });
+    var a = null; ks.some(function (k) { if (owner[k]) { a = owner[k]; return true; } return false; });
+    if (!a) { keep.push(c); ks.forEach(function (k) { owner[k] = c; }); return; }
     dup++;
+    ks.forEach(function (k) { if (!owner[k]) owner[k] = a; });
     a.qual = a.qual || c.qual; a.sale = a.sale || c.sale; a.value = Math.max(a.value || 0, c.value || 0);
     if (!a.utm && c.utm) a.utm = c.utm;
-    if (c.status) a.status = c.status;
+    if (c.status && !a.status) a.status = c.status;
   });
   STATE.crmDup = dup;
   return keep;
@@ -1967,7 +1972,7 @@ function renderCamp(per) {
   var c = STATE.sort.col, d = STATE.sort.dir;
   rows.sort(function (a, b) { var x = a[c], y = b[c]; if (typeof x === 'string') return x.localeCompare(y) * d; x = ok(x) ? x : -Infinity; y = ok(y) ? y : -Infinity; return (x - y) * d; });
   var hasRev = STATE.has.revenue, multiAcct = Object.keys(rows.reduce(function (a, r) { a[r.acct] = 1; return a; }, {})).length > 1;
-  function tags(r) { return (multiAcct || STATE.has.revenue ? '<span class="tag">' + (r.plat === 'google' ? 'Google' : 'Meta') + (multiAcct && !/^(meta|google)( ads)?$/i.test(r.acct) ? ' · ' + esc(r.acct) : '') + '</span>' : '') + '<span class="tag ac" title="' + esc(L('Critério: ', 'Criterio: ') + (r.why || '')) + '">' + FNAME(r.f) + '</span>' + (r.isNew ? '<span class="tag real">' + L('nova', 'nueva') + '</span>' : '') + (r.ended ? '<span class="tag">' + L('parada', 'pausada') + '</span>' : ''); }
+  function tags(r) { return (multiAcct || STATE.has.revenue ? '<span class="tag">' + PNAME(r.plat) + (multiAcct && !/^(meta|google)( ads)?$/i.test(r.acct) ? ' · ' + esc(r.acct) : '') + '</span>' : '') + '<span class="tag ac" title="' + esc(L('Critério: ', 'Criterio: ') + (r.why || '')) + '">' + FNAME(r.f) + '</span>' + (r.isNew ? '<span class="tag real">' + L('nova', 'nueva') + '</span>' : '') + (r.ended ? '<span class="tag">' + L('parada', 'pausada') + '</span>' : ''); }
   var html = '<div class="card' + (STATE.campAll ? ' showall' : '') + '" id="dzCampBox"><h2>' + L('Campanhas', 'Campañas') + '</h2><p class="mut" style="font-size:12.5px;margin-bottom:12px">' + L('Período atual em destaque à esquerda; as setas mostram a variação contra o período anterior (verde é melhora).', 'Período actual destacado a la izquierda; las flechas muestran la variación contra el período anterior (verde es mejora).') + '</p>';
   // Celular: cartões
   html += '<div class="only-narrow"><div class="row" style="margin-bottom:6px"><span class="mut" style="font-size:12.5px">' + L('Ordenar por', 'Ordenar por') + '</span><select id="dzSortN"><option value="spendNow">' + L('Investimento', 'Inversión') + '</option><option value="resNow">' + L('Resultados', 'Resultados') + '</option><option value="cprNow">' + L('Custo por resultado', 'Costo por resultado') + '</option><option value="name">' + L('Nome', 'Nombre') + '</option></select></div>' +
@@ -2047,7 +2052,8 @@ function gconvHTML(per) {
 function valorVazio(v) {
   var t = String(v == null ? '' : v).trim();
   if (!t) return true;
-  if (/^\{\{.*\}\}$/.test(t) || /^\$\{.*\}$/.test(t)) return true;   // template não substituído
+  if (/^\{\{.*\}\}$/.test(t) || /^\$\{.*\}$/.test(t)) return true;
+  if (/you don.?t have (enough )?permission|facebook\.com\/business\/help/i.test(t)) return true;   // erro da integração gravado no lugar do dado   // template não substituído
   var n = norm(t).replace(/[()\[\]]/g, '').trim();
   return ['unknown', 'undefined', 'null', 'none', 'not set', 'no set', 'nao definido', 'não definido', 'sin definir',
           'other', 'others', 'outro', 'outros', 'n/a', 'na', '-', '--', '0', 'desconhecido', 'desconocido', 'sem informacao'].indexOf(n) > -1;
@@ -2413,7 +2419,7 @@ function syncBar(per) {
   var plats = {}; STATE.rows.forEach(function (r) { plats[r.platform] = 1; });
   var pl = Object.keys(plats);
   $('#dzPlat').style.display = pl.length > 1 ? '' : 'none';
-  $('#dzPlat').innerHTML = '<option value="all">' + L('Todas as plataformas', 'Todas las plataformas') + '</option>' + pl.map(function (p) { return '<option value="' + p + '"' + (STATE.plat === p ? ' selected' : '') + '>' + (p === 'google' ? 'Google Ads' : 'Meta Ads') + '</option>'; }).join('');
+  $('#dzPlat').innerHTML = '<option value="all">' + L('Todas as plataformas', 'Todas las plataformas') + '</option>' + pl.map(function (p) { return '<option value="' + p + '"' + (STATE.plat === p ? ' selected' : '') + '>' + PNAME(p) + ' Ads</option>'; }).join('');
   var ac = {}; STATE.rows.forEach(function (r) { if (STATE.plat === 'all' || r.platform === STATE.plat) ac[r.account] = 1; });
   var al = Object.keys(ac).sort();
   $('#dzAcct').style.display = al.length > 1 ? '' : 'none';
