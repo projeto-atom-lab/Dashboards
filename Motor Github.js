@@ -6,7 +6,7 @@
 (function () {
 'use strict';
 
-var VERSION = '1.19.1';
+var VERSION = '1.20.0';
 var D = window.DASH || {};
 var ROOT = document.getElementById(D.elemento || 'dash');
 if (!ROOT) return;
@@ -936,6 +936,11 @@ function buildFunnel(f, per, camp) {
   var cur = agg(filtered(per.from, per.to, ext)), prev = agg(filtered(per.pFrom, per.pTo, ext));
   var crmSrc = STATE.sources.some(function (s) { return s.tipo === 'crm' && (s.funil || 'cadastro') === f; });
   var crmStatus = STATE.sources.some(function (s) { return s.tipo === 'crm' && (s.funil || 'cadastro') === f && s.status.hasStatus; });
+  /* Uma coluna de status existir não quer dizer que o comercial registra
+     qualificação e venda. Enquanto nenhuma aparecer em todo o histórico, a
+     etapa é "aguardando registro", e não um zero que parece resultado ruim. */
+  var everQual = crmStatus && STATE.crm.some(function (c) { return c.funnel === f && c.qual; });
+  var everSale = crmStatus && STATE.crm.some(function (c) { return c.funnel === f && c.sale; });
   /* Com uma campanha selecionada, os contatos só entram se a UTM registrada
      no cadastro bater com o nome dela. Quem chegou sem UTM não é atribuível a
      campanha nenhuma e fica de fora, por isso a ressalva no cabeçalho. */
@@ -985,6 +990,8 @@ function buildFunnel(f, per, camp) {
       var fonteQual = STATE.sources.filter(function (x) { return x.tipo === 'crm' && x.status && x.status.etapa; })[0];
       st('qual', L('Qualificados', 'Calificados') + (fonteQual ? nota(L('Os qualificados vêm de uma lista própria (', 'Los calificados vienen de una lista propia (') + esc(fonteQual.nome || fonteQual.etapa) + L('), separada da lista de cadastros. Se um contato qualificado não estiver também na lista de cadastros, a taxa de passagem entre as duas etapas fica subestimada.', '), separada de la lista de registros. Si un contacto calificado no está también en la lista de registros, la tasa de paso entre las dos etapas queda subestimada.')) : ''), crmCur.qual, crmPrev.qual, 'crm', BENCH.qualRate, { rateKey: 'qual' });
       st('sale', L('Compraram', 'Compraron'), crmCur.sale, crmPrev.sale, 'qual', BENCH.saleRate, { rateKey: 'sale', sale: true });
+      if (!everQual) { var sq = S[S.length - 2]; sq.cur = sq.prev = null; sq.missing = 'qual'; }
+      if (!everSale) { var ss = S[S.length - 1]; ss.cur = ss.prev = null; ss.missing = 'sale'; }
     } else {
       st('qual', L('Qualificados', 'Calificados'), null, null, 'crm', null, { missing: 'qual' });
       st('sale', L('Compraram', 'Compraron'), null, null, 'qual', null, { missing: 'sale' });
@@ -1018,7 +1025,7 @@ function buildFunnel(f, per, camp) {
   if (crmStatus && crmCur.sale + crmPrev.sale > 0) level = 4;
   var salesReal = isSale(f) ? cur.purchases : (crmStatus ? crmCur.sale : null);
   var revenueReal = isSale(f) ? (cur.revenue || null) : (crmStatus && crmCur.value ? crmCur.value : null);
-  return { f: f, cur: cur, prev: prev, stages: S, by: byKey, level: level, crmSrc: crmSrc, crmStatus: crmStatus, crmCur: crmCur, crmPrev: crmPrev, resKey: resKey, salesReal: salesReal, revenueReal: revenueReal };
+  return { f: f, cur: cur, prev: prev, stages: S, by: byKey, level: level, crmSrc: crmSrc, crmStatus: crmStatus, crmCur: crmCur, crmPrev: crmPrev, everQual: everQual, everSale: everSale, resKey: resKey, salesReal: salesReal, revenueReal: revenueReal };
 }
 
 /* ============================== RECOMENDAÇÕES POR ETAPA ============================== */
@@ -1238,6 +1245,13 @@ function shell() {
     '<div class="head"><div><div class="brand"><div class="logo">' + esc(initial) + '</div><h1>' + esc(D.cliente || '') + ' · ' + L('Mídia paga', 'Medios pagos') + '</h1></div>' +
     '<small id="dzUpd"></small></div><div class="row">' +
     (LANGS.length > 1 ? '<div class="pills">' + LANGS.map(function (l) { return '<button class="pill' + (l === LANG ? ' on' : '') + '" data-lang="' + l + '">' + l.toUpperCase() + '</button>'; }).join('') + '</div>' : '') +
+    '<span style="position:relative;display:inline-block"><button class="btn" id="dzExport">⤓ ' + L('Exportar', 'Exportar') + '</button>' +
+    '<span id="dzExpMenu" style="display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:260px;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.15);padding:6px">' +
+    [['pdf', L('Relatório em PDF', 'Informe en PDF'), L('todas as abas, com o período escolhido', 'todas las pestañas, con el período elegido')],
+     ['midia', L('Mídia por dia e campanha', 'Medios por día y campaña'), L('planilha CSV', 'planilla CSV')],
+     ['leads', L('Cadastros por dia', 'Registros por día'), L('planilha CSV, sem dados pessoais', 'planilla CSV, sin datos personales')]].map(function (o) {
+      return '<button type="button" data-exp="' + o[0] + '" style="display:block;width:100%;text-align:left;background:none;border:0;border-radius:8px;padding:8px 10px;cursor:pointer;color:var(--tx)"><b style="font-weight:600;font-size:13px">' + o[1] + '</b><br><small class="mut">' + o[2] + '</small></button>';
+    }).join('') + '</span></span> ' +
     '<button class="btn pri" id="dzReload">↻ ' + L('Atualizar', 'Actualizar') + '</button></div></div>' +
     '<div class="card"><div class="pills" id="dzPresets">' +
     [['7', L('7 dias', '7 días')], ['14', L('14 dias', '14 días')], ['30', L('30 dias', '30 días')], ['mtd', L('Este mês', 'Este mes')], ['lastmonth', L('Mês passado', 'Mes pasado')], ['custom', L('Escolher datas', 'Elegir fechas')]].map(function (p) { return '<button class="pill" data-p="' + p[0] + '">' + p[1] + '</button>'; }).join('') +
@@ -1254,6 +1268,9 @@ function shell() {
 }
 function bindShell() {
   $('#dzReload').onclick = function () { run(); };
+  $('#dzExport').onclick = function (e) { e.stopPropagation(); var m = $('#dzExpMenu'); m.style.display = m.style.display === 'none' ? 'block' : 'none'; };
+  document.addEventListener('click', function () { var m = $('#dzExpMenu'); if (m) m.style.display = 'none'; });
+  $$('[data-exp]').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); $('#dzExpMenu').style.display = 'none'; var k = b.dataset.exp; if (k === 'pdf') exportPDF(); else if (k === 'midia') exportMidia(); else exportLeads(); }; });
   $$('[data-lang]').forEach(function (b) { b.onclick = function () { LANG = b.dataset.lang; store.set('lang', LANG); shell(); renderAll(); }; });
   $$('#dzPresets .pill').forEach(function (b) { b.onclick = function () { STATE.preset = b.dataset.p; store.set('preset', STATE.preset); renderAll(); }; });
   $('#dzFrom').onchange = $('#dzTo').onchange = function () { STATE.from = $('#dzFrom').value; STATE.to = $('#dzTo').value; if (STATE.from && STATE.to) renderAll(); };
@@ -1518,7 +1535,7 @@ function renderOverview(per) {
       kpi(L('Investido', 'Invertido'), c.spend, p.spend, money, false, L('só nas campanhas deste objetivo', 'solo en campañas de este objetivo'));
     if (isSale(f) && STATE.has.revenue && (!SALE_TYPES[f] || SALE_TYPES[f].receita)) boxes += kpi(L('Vendido', 'Vendido'), c.revenue, p.revenue, money, false, HELP('revenue')) + kpi('ROAS', c.roas, p.roas, xf, false, HELP('roas'));
     if ((isLead(f) || f === 'whatsapp') && F.crmSrc) boxes += kpi(L('No comercial', 'En ventas'), F.crmCur.n, F.crmPrev.n, count, false, HELP('crm'));
-    if (F.crmStatus) boxes += kpi(L('Vendas', 'Ventas'), F.crmCur.sale, F.crmPrev.sale, count, false, L('registradas pelo comercial', 'registradas por ventas'));
+    if (F.everSale) boxes += kpi(L('Vendas', 'Ventas'), F.crmCur.sale, F.crmPrev.sale, count, false, L('registradas pelo comercial', 'registradas por ventas'));
     boxes += '</div></div>';
   });
   if (boxes) html += '<div class="cols">' + boxes + '</div>';
@@ -1552,7 +1569,8 @@ function renderFrente(fr, per) {
       kpi(L('Investido', 'Invertido'), c.spend, p.spend, money, false, L('só nas campanhas desta frente', 'solo en campañas de este frente'));
     if (isSale(f) && STATE.has.revenue && (!SALE_TYPES[f] || SALE_TYPES[f].receita)) boxes += kpi(L('Vendido', 'Vendido'), c.revenue, p.revenue, money, false, HELP('revenue')) + kpi('ROAS', c.roas, p.roas, xf, false, HELP('roas'));
     if ((isLead(f) || f === 'whatsapp') && F.crmSrc) boxes += kpi(L('No comercial', 'En ventas'), F.crmCur.n, F.crmPrev.n, count, false, HELP('crm'));
-    if (F.crmStatus) boxes += kpi(L('Qualificados', 'Calificados'), F.crmCur.qual, F.crmPrev.qual, count, false, '') + kpi(L('Vendas', 'Ventas'), F.crmCur.sale, F.crmPrev.sale, count, false, L('registradas pelo comercial', 'registradas por ventas'));
+    if (F.everQual) boxes += kpi(L('Qualificados', 'Calificados'), F.crmCur.qual, F.crmPrev.qual, count, false, '');
+    if (F.everSale) boxes += kpi(L('Vendas', 'Ventas'), F.crmCur.sale, F.crmPrev.sale, count, false, L('registradas pelo comercial', 'registradas por ventas'));
     boxes += '</div></div>';
   });
   html += '<div class="cols">' + boxes + '<div class="box"><h3>' + L('Mídia desta frente', 'Medios de este frente') + '</h3><div class="grid">' +
@@ -1586,8 +1604,8 @@ function ladder(F) {
 function missingLine(key) {
   return ({
     crm: L('Sem lista própria de contatos conectada.', 'Sin lista propia de contactos conectada.'),
-    qual: L('Ninguém anota quem era um bom contato.', 'Nadie anota quién era un buen contacto.'),
-    sale: L('Ninguém anota quem comprou.', 'Nadie anota quién compró.')
+    qual: L('Aguardando o registro de qualificação do comercial.', 'Esperando el registro de calificación de ventas.'),
+    sale: L('Aguardando o registro de vendas do comercial.', 'Esperando el registro de ventas.')
   })[key] || '';
 }
 /* Largura de cada degrau: mistura a proporção real (raiz quadrada, para o
@@ -2447,6 +2465,84 @@ function syncBar(per) {
     (per.len !== per.pLen ? ' · <span style="color:var(--warn,#b45309)">' + per.len + ' × ' + per.pLen + ' ' + L('dias: totais não se comparam direto; olhe custos e taxas', 'días: los totales no se comparan directo; mirá costos y tasas') + '</span>' : '') +
     (semDado ? ' · <span style="color:var(--warn,#b45309)">' + L('sem dados de mídia no período de comparação', 'sin datos de medios en el período de comparación') + '</span>' : '');
   $('#dzUpd').textContent = STATE.loadedAt ? L('Dados lidos em ', 'Datos leídos el ') + STATE.loadedAt.toLocaleString(LOC()) + (lastDataDate() ? ' · ' + L('último dia com dados: ', 'último día con datos: ') + fmtD(lastDataDate(), 1) : '') : '';
+}
+/* ============================== EXPORTAR ============================== */
+/* PDF: todas as abas, cada uma começando numa página, seção por seção para
+   não cortar card ao meio. As bibliotecas só carregam quando alguém exporta.
+   CSV: ponto e vírgula e vírgula decimal (Excel em português abre direto);
+   nenhum dado pessoal de contato sai no arquivo. */
+var EXP_LIBS = { img: ['https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js', 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js'],
+  pdf: ['https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js'] };
+function expLoadOne(u) { return new Promise(function (ok, no) { if (document.querySelector('script[data-lib="' + u + '"]')) return ok(); var sc = document.createElement('script'); sc.src = u; sc.setAttribute('data-lib', u); sc.onload = function () { ok(); }; sc.onerror = function () { no(new Error(u)); }; document.head.appendChild(sc); }); }
+function expLoad(list) { return list.reduce(function (p, u) { return p.catch(function () { return expLoadOne(u); }); }, Promise.reject()); }
+function expBase() { var p = resolvePeriod(); return String(D.cliente || 'relatorio').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\W+/g, '-').toLowerCase() + '_' + p.from + '_a_' + p.to; }
+function expDownload(name, blob) { var u = URL.createObjectURL(blob), a = document.createElement('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(u); a.remove(); }, 1500); }
+function expCell(v) { if (typeof v === 'number') return isFinite(v) ? String(Math.round(v * 100) / 100).replace('.', ',') : ''; v = String(v == null ? '' : v); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+function expCSV(name, head, rows) { expDownload(name, new Blob(['\ufeff' + [head].concat(rows).map(function (r) { return r.map(expCell).join(';'); }).join('\r\n')], { type: 'text/csv;charset=utf-8' })); }
+function exportMidia() {
+  var p = resolvePeriod(), m = {};
+  filtered(p.from, p.to).forEach(function (r) {
+    var k = r.date + '|' + r.key, x = m[k] || (m[k] = { d: r.date, plat: PNAME(r.platform), conta: r.account, camp: r.campaign, nome: friendlyName(r.campaign) || '', f: FNAME(r.funnel), spend: 0, impr: 0, clicks: 0, res: 0 });
+    var rk = RESULT(r.funnel); x.spend += r.spend; x.impr += r.impressions; x.clicks += r.clicks; x.res += rk ? r[rk] : 0;
+  });
+  expCSV(expBase() + '_midia.csv', [L('Data', 'Fecha'), L('Plataforma', 'Plataforma'), L('Conta', 'Cuenta'), L('Campanha', 'Campaña'), L('Nome amigável', 'Nombre amigable'), L('Funil', 'Embudo'), L('Investido', 'Invertido'), L('Aparições', 'Apariciones'), L('Cliques', 'Clics'), L('Resultados', 'Resultados')],
+    Object.keys(m).sort().filter(function (k) { var x = m[k]; return x.spend || x.impr || x.clicks || x.res; }).map(function (k) { var x = m[k]; return [fmtD(x.d, 1), x.plat, x.conta, x.camp, x.nome, x.f, x.spend, x.impr, x.clicks, x.res]; }));
+}
+function exportLeads() {
+  var p = resolvePeriod(), m = {};
+  STATE.crm.forEach(function (c) {
+    if (c.date < p.from || c.date > p.to) return;
+    var k = c.date + '|' + c.funnel + '|' + (c.utm || '') + '|' + (c.status || ''), x = m[k] || (m[k] = { d: c.date, f: FNAME(c.funnel), utm: c.utm || '', st: c.status || '', n: 0, q: 0, v: 0 });
+    x.n++; if (c.qual) x.q++; if (c.sale) x.v++;
+  });
+  expCSV(expBase() + '_cadastros.csv', [L('Data', 'Fecha'), L('Funil', 'Embudo'), L('Campanha (UTM)', 'Campaña (UTM)'), L('Status', 'Estado'), L('Contatos', 'Contactos'), L('Qualificados', 'Calificados'), L('Vendas', 'Ventas')],
+    Object.keys(m).sort().map(function (k) { var x = m[k]; return [fmtD(x.d, 1), x.f, x.utm, x.st, x.n, x.q, x.v]; }));
+}
+function expBusy(msg) {
+  var o = document.getElementById('dzBusy');
+  if (!msg) { if (o) o.remove(); return; }
+  if (!o) { o = document.createElement('div'); o.id = 'dzBusy'; o.style.cssText = 'position:fixed;inset:0;z-index:99;background:rgba(0,0,0,.25);display:flex;align-items:flex-start;justify-content:center;padding-top:120px;font:500 14px Poppins,system-ui,sans-serif'; document.body.appendChild(o); }
+  o.innerHTML = '<div style="background:#fff;color:#16161a;border-radius:12px;padding:16px 20px;box-shadow:0 10px 30px rgba(0,0,0,.15);max-width:420px">' + msg + '</div>';
+}
+function exportPDF() {
+  var tab0 = CUR_TAB;
+  expBusy(L('Preparando o PDF…', 'Preparando el PDF…'));
+  Promise.all([expLoad(EXP_LIBS.img), expLoad(EXP_LIBS.pdf)]).then(function () {
+    var J = window.jspdf && window.jspdf.jsPDF, HI = window.htmlToImage; if (!J || !HI) throw new Error('bibliotecas indisponíveis');
+    var doc = new J({ unit: 'mm', format: 'a4' }), W = 210, H = 297, M = 10, cw = W - 2 * M, y = M, first = true, skipFonts = false;
+    var bg = getComputedStyle(ROOT).backgroundColor || '#ffffff';
+    var opts = function () { return { pixelRatio: 1.6, backgroundColor: bg, skipFonts: skipFonts, filter: function (n) { return !(n.id === 'dzExpMenu' || n.id === 'dzBusy' || (n.classList && n.classList.contains('tip'))); } }; };
+    function snap(el) { return HI.toCanvas(el, opts()).catch(function (e) { if (skipFonts) throw e; skipFonts = true; return HI.toCanvas(el, opts()); }); }
+    function place(cv) {
+      if (!cv.width || !cv.height) return;
+      var hmm = cv.height * cw / cv.width;
+      if (hmm <= H - 2 * M) { if (y + hmm > H - M && !first) { doc.addPage(); y = M; } doc.addImage(cv.toDataURL('image/jpeg', 0.92), 'JPEG', M, y, cw, hmm); y += hmm + 4; first = false; return; }
+      var ppm = cv.width / cw, sh = Math.floor((H - 2 * M) * ppm), off = 0;
+      if (!first) { doc.addPage(); y = M; }
+      while (off < cv.height) { var hh = Math.min(sh, cv.height - off), c = document.createElement('canvas'); c.width = cv.width; c.height = hh; c.getContext('2d').drawImage(cv, 0, off, cv.width, hh, 0, 0, cv.width, hh); if (off > 0) { doc.addPage(); y = M; } doc.addImage(c.toDataURL('image/jpeg', 0.92), 'JPEG', M, y, cw, hh / ppm); y += hh / ppm + 4; off += hh; first = false; }
+    }
+    var tabs = orderedTabs().filter(function (t) { return t[0] !== 'diag'; }), chain = Promise.resolve();
+    // cabeçalho com cliente e período
+    chain = chain.then(function () { var hd = ROOT.querySelector('.head'), card = hd && hd.nextElementSibling; var c2 = hd ? snap(hd).then(place) : Promise.resolve(); return card ? c2.then(function () { return snap(card).then(place); }) : c2; });
+    tabs.forEach(function (t, ti) {
+      chain = chain.then(function () {
+        expBusy(L('Gerando o PDF: ', 'Generando el PDF: ') + (typeof t[1] === 'function' ? t[1]() : t[1]) + ' (' + (ti + 1) + '/' + tabs.length + ')…');
+        CUR_TAB = t[0]; showTab(); return new Promise(function (r) { setTimeout(r, 450); });
+      }).then(function () {
+        var v = $('#v-' + t[0]); if (!v) return;
+        if (ti > 0) { doc.addPage(); y = M; first = true; }
+        var title = document.createElement('div'); title.style.cssText = 'font:600 18px Poppins,system-ui,sans-serif;padding:2px 0 6px;color:var(--tx)'; title.textContent = typeof t[1] === 'function' ? t[1]() : t[1];
+        v.insertBefore(title, v.firstChild);
+        var parts = Array.prototype.slice.call(v.children), c2 = Promise.resolve();
+        parts.forEach(function (el) { c2 = c2.then(function () { return snap(el).then(place); }); });
+        return c2.then(function () { title.remove(); });
+      });
+    });
+    return chain.then(function () { expDownload(expBase() + '.pdf', doc.output('blob')); });
+  }).then(function () { CUR_TAB = tab0; showTab(); expBusy(null); }, function (e) {
+    if (window.console) console.error(e); CUR_TAB = tab0; showTab();
+    expBusy(L('Não foi possível gerar o PDF (', 'No se pudo generar el PDF (') + esc(e && e.message || e) + L('). As planilhas CSV continuam disponíveis no mesmo menu.', '). Las planillas CSV siguen disponibles en el mismo menú.') + '<div style="text-align:right;margin-top:10px"><button onclick="this.closest(\'#dzBusy\').remove()" style="border:0;border-radius:8px;padding:6px 12px;background:#16161a;color:#fff;cursor:pointer">Ok</button></div>');
+  });
 }
 function renderAll() {
   var per = resolvePeriod();
